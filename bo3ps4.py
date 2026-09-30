@@ -315,24 +315,54 @@ def remote_size(f: ftplib.FTP, remote: str) -> int | None:
 
 
 def upload_stream(f: ftplib.FTP, fh, size: int, remote: str):
-    """Streams a file to the PS4 via <remote>.part + rename, so the game never sees a half-written file."""
+    """Upload to .part, resume when the local handle is seekable, verify bytes, then atomically rename."""
     remote = check_writable(remote)
     ftp_makedirs(f, posixpath.dirname(remote))
-    start, sent = time.time(), 0
+    part_remote = remote + ".part"
+    existing = remote_size(f, part_remote) or 0
+    resumable = existing > 0 and existing < size and bool(getattr(fh, "seekable", lambda: False)())
+    if existing >= size and existing != size:
+        try:
+            f.delete(part_remote)
+        except ftplib.error_perm:
+            pass
+        existing = 0
+    if existing == size:
+        if remote_size(f, part_remote) != size:
+            raise RuntimeError(f"FTP partial upload size changed while checking {part_remote}")
+        sent = size
+        elapsed = 0.001
+    else:
+        if resumable:
+            fh.seek(existing)
+        elif hasattr(fh, "seek"):
+            try:
+                fh.seek(0)
+            except (OSError, ValueError):
+                pass
+        start, sent = time.time(), existing
 
-    def progress(block):
-        nonlocal sent
-        sent += len(block)
-        if size > 64 << 20:
-            print(f"\r  {remote}: {sent / 2**20:.0f}/{size / 2**20:.0f} MB", end="", flush=True)
+        def progress(block):
+            nonlocal sent
+            sent += len(block)
+            if size > 64 << 20:
+                print(f"\r  {remote}: {sent / 2**20:.0f}/{size / 2**20:.0f} MB", end="", flush=True)
 
-    f.storbinary(f"STOR {remote}.part", fh, blocksize=1 << 20, callback=progress)
+        rest = existing if resumable else None
+        f.storbinary(f"STOR {part_remote}", fh, blocksize=1 << 20, callback=progress, rest=rest)
+        elapsed = max(time.time() - start, 0.001)
+
+    verified = remote_size(f, part_remote)
+    if verified != size:
+        raise RuntimeError(f"FTP upload verification failed for {part_remote}: expected {size} bytes, got {verified}")
     try:
         f.delete(remote)
     except ftplib.error_perm:
         pass
-    f.rename(remote + ".part", remote)
-    secs = max(time.time() - start, 0.001)
+    f.rename(part_remote, remote)
+    if remote_size(f, remote) != size:
+        raise RuntimeError(f"FTP rename verification failed for {remote}")
+    secs = max(elapsed, 0.001)
     print(f"\r  put {remote} ({size / 1e6:.1f} MB, {size / 1e6 / secs:.1f} MB/s)" + " " * 10)
 
 
@@ -368,6 +398,75 @@ def _list(f: ftplib.FTP, path: str) -> list[str]:
     except ftplib.error_perm:
         pass
     return [l for l in lines if not l.endswith((" .", " .."))]
+
+
+def ftp_names(f: ftplib.FTP, path: str) -> list[str]:
+    try:
+        names = f.nlst(path)
+    except ftplib.error_perm:
+        return []
+    prefix = path.rstrip("/") + "/"
+    return sorted({n[len(prefix):] if n.startswith(prefix) else posixpath.basename(n) for n in names if n not in (path, ".")})
+
+
+def remote_tree_size(f: ftplib.FTP, path: str) -> int:
+    total = 0
+    for name in ftp_names(f, path):
+        child = f"{path.rstrip('/')}/{name}"
+        size = remote_size(f, child)
+        if size is not None:
+            total += size
+        else:
+            total += remote_tree_size(f, child)
+    return total
+
+
+def ftp_remove_tree(f: ftplib.FTP, path: str):
+    path = posixpath.normpath(path)
+    check_writable(path + "/")
+    for name in ftp_names(f, path):
+        child = f"{path}/{name}"
+        size = remote_size(f, child)
+        if size is not None:
+            f.delete(child)
+        else:
+            ftp_remove_tree(f, child)
+    try:
+        f.rmd(path)
+    except ftplib.error_perm:
+        pass
+
+
+def valid_usermap_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9_]{1,55}", name))
+
+
+def cmd_list_ps4(_):
+    with ftp() as f:
+        root = f"{REMOTE}/usermaps"
+        maps = ftp_names(f, root)
+        if not maps:
+            print("no installed usermaps")
+            return
+        for name in maps:
+            path = f"{root}/{name}"
+            print(f"{name:56} {remote_tree_size(f, path) / 2**30:7.2f} GB")
+
+
+def cmd_remove(a):
+    if not valid_usermap_name(a.name):
+        sys.exit("invalid map name: use only lowercase letters, digits and underscore (max 55 characters)")
+    path = f"{REMOTE}/usermaps/{a.name}"
+    with ftp() as f:
+        size = remote_tree_size(f, path)
+        if size == 0 and not ftp_names(f, path):
+            sys.exit(f"installed usermap not found: {a.name}")
+        print(f"remove {a.name}: {size / 2**30:.2f} GB from {path}")
+        if not confirm_action("Continue?", a.yes):
+            print("cancelled")
+            return
+        ftp_remove_tree(f, path)
+        print(f"removed {a.name}")
 
 
 # ---------------------------------------------------------------- one-time setup
@@ -983,6 +1082,11 @@ def main():
     cc.add_argument("--include-zones", action="store_true", help="also delete the pulled PS4 zones")
     cc.add_argument("--yes", action="store_true", help="skip confirmation")
     s.set_defaults(fn=cmd_cache)
+    sub.add_parser("list-ps4", help="list installed custom maps and sizes").set_defaults(fn=cmd_list_ps4)
+    s = sub.add_parser("remove", help="remove one installed custom map")
+    s.add_argument("name")
+    s.add_argument("--yes", action="store_true", help="skip confirmation")
+    s.set_defaults(fn=cmd_remove)
     sub.add_parser("status", help="what's on the PS4").set_defaults(fn=cmd_status)
     a = p.parse_args()
     CFG = Config(Path(a.config))
