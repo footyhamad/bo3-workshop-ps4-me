@@ -988,19 +988,22 @@ def generate_compatibility_markdown(maps: dict) -> str:
     ]
     for item, r in sorted(maps.items()):
         notes = r.get("notes") or r.get("note") or ((r.get("problems") or [""])[0])
+        conversion = "yes" if r.get("stage") in ("converted", "pushed") else "no"
+        map_name = str(r.get("map", "?")).replace("|", "/")
+        failure = str(r.get("failure_class", "")).replace("|", "/")
+        note = str(notes).replace("|", "/")
         rows.append(
-            f"| {item} | {str(r.get("map", "?")).replace("|", "/")} | "
-            f"{("yes" if r.get("stage") in ("converted", "pushed") else "no")} | "
-            f"{r.get("in_game", "")} | {r.get("tier_reached", "none")} | "
-            f"{str(r.get("failure_class", "")).replace("|", "/")} | {str(notes).replace("|", "/")} |"
+            f"| {item} | {map_name} | {conversion} | {r.get('in_game', '')} | "
+            f"{r.get('tier_reached', 'none')} | {failure} | {note} |"
         )
     return "\n".join(rows) + "\n"
 
 def cmd_compat(a):
     maps = load_compat()
     if a.write:
-        Path(HERE / "COMPATIBILITY.md").write_text(generate_compatibility_markdown(maps), encoding="utf-8")
-        print(f"wrote {HERE / "COMPATIBILITY.md"}")
+        target = HERE / "COMPATIBILITY.md"
+        target.write_text(generate_compatibility_markdown(maps), encoding="utf-8")
+        print(f"wrote {target}")
         return
     selected = list(maps.items())
     if a.status:
@@ -1018,7 +1021,7 @@ def cmd_compat(a):
 def cmd_compat_export(a):
     document = _compat_document()
     Path(a.path).write_text(json.dumps(document, indent=1, ensure_ascii=False), encoding="utf-8")
-    print(f"exported {len(document["maps"])} map record(s) to {a.path}")
+    print(f"exported {len(document['maps'])} map record(s) to {a.path}")
 
 def cmd_compat_import(a):
     try:
@@ -1031,7 +1034,7 @@ def cmd_compat_import(a):
     document["maps"].update(incoming["maps"])
     document["schema_version"] = COMPAT_SCHEMA
     save_compat_document(document)
-    print(f"imported {len(incoming["maps"])} map record(s)")
+    print(f"imported {len(incoming['maps'])} map record(s)")
 
 def cmd_mark(a):
     if a.id not in load_compat():
