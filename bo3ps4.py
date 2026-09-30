@@ -616,6 +616,18 @@ def cmd_doctor(a):
     check(f"patched converter: {CFG.ffport}", CFG.ffport.exists(), "scripts/build-ffport.ps1 (README.md)")
     check(f"runtime pack: {CFG.upstream / 'Console.zip'}", (CFG.upstream / "Console.zip").exists(), "README.md, step 2")
     check(f"SteamCMD: {CFG.steamcmd}", CFG.steamcmd.exists(), "download SteamCMD (README.md)")
+    check(f"managed Workshop cache: {CFG.cache_dir}", CFG.cache_dir.exists() or True,
+          "created automatically on first cached map")
+    if CFG.psslc_path:
+        check(f"optional psslc: {CFG.psslc_path}", CFG.psslc_path.is_file(),
+              "set psslc_path to your local orbis-wave-psslc.exe")
+        if CFG.psslc_path.is_file():
+            sdk_bin = CFG.psslc_path.parent
+            check("optional psslc GNM host libraries",
+                  (sdk_bin / "libSceGnm.dll").exists() and (sdk_bin / "libSceGnmx.dll").exists(),
+                  "the upstream compiler path needs libSceGnm.dll and libSceGnmx.dll beside the compiler")
+    else:
+        check("optional psslc: not configured", True, "")
     try:
         check(f"SteamCMD has a saved login ({'set' if CFG.steam_user else 'cached'})", bool(steam_user()))
     except RuntimeError as e:
@@ -664,6 +676,12 @@ def convert_map(src: Path, languages: str, log_path: Path, name: str | None = No
     CFG.work.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, FFPORTER_WORK=str(CFG.work))  # multi-GB caches: keep them in the workdir
+    if CFG.psslc_path:
+        if not CFG.psslc_path.is_file():
+            print(f"warning: configured psslc_path does not exist: {CFG.psslc_path}")
+        elif CFG.psslc_path.name.lower() == "orbis-wave-psslc.exe":
+            # Upstream v1.50 resolves the compiler from FFPORTER_PS4_SDK_BIN and also requires its GNM host DLLs.
+            env["FFPORTER_PS4_SDK_BIN"] = str(CFG.psslc_path.parent)
     stage = None
     with open(log_path, "w", encoding="utf-8") as log:
         proc = subprocess.Popen(cmd, cwd=CFG.ffport.parent, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
