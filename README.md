@@ -60,8 +60,9 @@ This project adds:
    It clones PS4-BO3-Customs v1.50, applies [patches/](patches), and builds `ffport\ffport.exe`.
 2. **Download `Console.zip`** from the [PS4-BO3-Customs v1.50 release](https://github.com/ItsJokerZz/PS4-BO3-Customs/releases/tag/v1.50)
    into `upstream\` (the in-game mod, its UI scripts and the shared `zm_levelcommon` zone).
-3. **Configure:** copy `config.example.json` to `config.json` and set `ps4_ip`, `workdir` (a folder with room) and
-   `steamcmd`. `pc_game` and `title_id` are found automatically when left empty/`auto`.
+3. **Configure:** copy `config.example.json` to `config.json` and set `ps4_ip` and `steamcmd`. `pc_game` and `title_id`
+   are found automatically when left empty/`auto`. Legacy configs are accepted: an empty `workdir` now defaults to a
+   repo-local `workdir`.
 4. **SteamCMD login**, once, by hand (it asks for your password and Steam Guard code, then remembers the login):
    ```
    D:\steamcmd\steamcmd.exe +login <your Steam account> +quit
@@ -82,7 +83,7 @@ This project adds:
 
 ```
 py bo3ps4.py port 1168113418 798643901            # one or more Workshop IDs
-py bo3ps4.py port --file maps.txt --cleanup       # a list; --cleanup deletes each map's files once it's on the PS4
+py bo3ps4.py port --file maps.txt --cleanup       # a list; --cleanup deletes only the managed Workshop cache after upload
 py bo3ps4.py compat                               # what converted, what failed and why
 py bo3ps4.py mark 798643901 ok                    # after playing it
 ```
