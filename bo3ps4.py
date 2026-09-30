@@ -54,21 +54,51 @@ DONOR_EXCLUDE = ("cp_doa_bo3_patch.",)
 # ---------------------------------------------------------------- config
 
 class Config:
+    REQUIRED = ("ps4_ip", "workdir", "steamcmd")
+    PROGRESS_MODES = {"auto", "tty", "plain", "json"}
+
     def __init__(self, path: Path):
         if not path.exists():
             sys.exit(f"no {path.name}: copy config.example.json to {path.name} and fill it in (see README.md)")
-        c = json.loads(path.read_text(encoding="utf-8"))
-        self.ps4_ip = c["ps4_ip"]
-        self.ftp_port = int(c.get("ftp_port", 2121))
-        self.title_id = c.get("title_id", "auto")
-        self.workdir = Path(c["workdir"])
-        self.pc_game = Path(c["pc_game"]) if c.get("pc_game") else None
-        self.steamcmd = Path(c["steamcmd"])
-        self.steam_user = c.get("steam_user") or None
-        self.ffport = Path(c.get("ffport") or HERE / "ffport" / "ffport.exe")
-        self.upstream = Path(c.get("upstream_release") or HERE / "upstream")
-        self.min_free_gb = float(c.get("min_free_gb", 25))
-        self.zones = Path(c["ps4_zones"]) if c.get("ps4_zones") else self.workdir / "ps4-zones"
+        try:
+            c = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            sys.exit(f"invalid {path.name}: {e}")
+        if not isinstance(c, dict):
+            sys.exit(f"invalid {path.name}: top level must be a JSON object")
+        missing = [k for k in self.REQUIRED if not c.get(k)]
+        if missing:
+            sys.exit(f"invalid config.json: missing required key(s): {', '.join(missing)}")
+        try:
+            self.ps4_ip = str(c["ps4_ip"])
+            self.ftp_port = int(c.get("ftp_port", 2121))
+            self.title_id = c.get("title_id", "auto")
+            self.workdir = Path(c["workdir"])
+            self.pc_game = Path(c["pc_game"]) if c.get("pc_game") else None
+            self.steamcmd = Path(c["steamcmd"])
+            self.steam_user = c.get("steam_user") or None
+            self.ffport = Path(c.get("ffport") or HERE / "ffport" / "ffport.exe")
+            self.upstream = Path(c.get("upstream_release") or HERE / "upstream")
+            self.min_free_gb = float(c.get("min_free_gb", 25))
+            self.cache_dir = Path(c.get("cache_dir") or self.workdir / "cache" / "maps")
+            self.keep_cache = bool(c.get("keep_cache", True))
+            self.psslc_path = Path(c["psslc_path"]) if c.get("psslc_path") else None
+            self.strict_mode = bool(c.get("strict_mode", False))
+            self.progress_mode = str(c.get("progress", "auto")).lower()
+            self.parallelism = int(c.get("parallelism", 1))
+            self.zones = Path(c["ps4_zones"]) if c.get("ps4_zones") else self.workdir / "ps4-zones"
+        except (KeyError, TypeError, ValueError) as e:
+            sys.exit(f"invalid config.json: {e}")
+        if not 1 <= self.ftp_port <= 65535:
+            sys.exit("invalid config.json: ftp_port must be 1..65535")
+        if self.min_free_gb < 0:
+            sys.exit("invalid config.json: min_free_gb must be >= 0")
+        if self.parallelism < 1:
+            sys.exit("invalid config.json: parallelism must be >= 1")
+        if self.progress_mode not in self.PROGRESS_MODES:
+            sys.exit("invalid config.json: progress must be auto, tty, plain, or json")
+        if self.psslc_path and self.psslc_path.exists() and self.psslc_path.is_dir():
+            self.psslc_path = self.psslc_path / "orbis-wave-psslc.exe"
 
     out = property(lambda self: self.workdir / "out")
     work = property(lambda self: self.workdir / "porter-work")
