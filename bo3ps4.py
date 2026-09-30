@@ -55,7 +55,7 @@ DONOR_EXCLUDE = ("cp_doa_bo3_patch.",)
 # ---------------------------------------------------------------- config
 
 class Config:
-    REQUIRED = ("ps4_ip", "workdir", "steamcmd")
+    # Keep legacy configs working: workdir was historically allowed to be empty and now defaults safely.\n    REQUIRED = ("ps4_ip", "steamcmd")
     PROGRESS_MODES = {"auto", "tty", "plain", "json"}
 
     def __init__(self, path: Path):
@@ -74,7 +74,7 @@ class Config:
             self.ps4_ip = str(c["ps4_ip"])
             self.ftp_port = int(c.get("ftp_port", 2121))
             self.title_id = c.get("title_id", "auto")
-            self.workdir = Path(c["workdir"])
+            self.workdir = Path(c.get("workdir") or HERE / "workdir")
             self.pc_game = Path(c["pc_game"]) if c.get("pc_game") else None
             self.steamcmd = Path(c["steamcmd"])
             self.steam_user = c.get("steam_user") or None
