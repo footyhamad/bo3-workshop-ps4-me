@@ -110,6 +110,149 @@ class Config:
 CFG: Config = None  # set in main()
 
 
+# ---------------------------------------------------------------- progress/cache foundation
+
+def progress_event(map_id: str, stage: str, item: str = "", done: int | float = 0,
+                   total: int | float = 0, unit: str = "item", speed: float | None = None,
+                   eta_s: float | None = None, message: str = "") -> dict:
+    event = {
+        "ts": time.time(), "map": map_id, "stage": stage, "item": item,
+        "done": done, "total": total, "unit": unit, "speed": speed,
+        "eta_s": eta_s, "message": message,
+    }
+    if CFG.progress_mode == "json":
+        print(json.dumps(event, ensure_ascii=False, separators=(",", ":")), flush=True)
+    return event
+
+
+def file_tree_size(root: Path) -> int:
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file()) if root.exists() else 0
+
+
+def cache_meta_path(item: str) -> Path:
+    return CFG.cache_dir / item / ".bo3ps4-cache.json"
+
+
+def read_cache_meta(item: str) -> dict:
+    path = cache_meta_path(item)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cache_valid(item: str, details: dict | None = None) -> bool:
+    root = CFG.cache_dir / item
+    if not root.is_dir() or map_zone(root) is None:
+        return False
+    meta = read_cache_meta(item)
+    if meta.get("schema") != 1 or str(meta.get("workshop_id")) != str(item):
+        return False
+    if details:
+        current_version = details.get("time_updated")
+        cached_version = meta.get("time_updated")
+        if current_version and cached_version and str(current_version) != str(cached_version):
+            return False
+        expected_size = int(details.get("size") or 0)
+        cached_size = int(meta.get("source_file_size") or 0)
+        if expected_size and cached_size and expected_size != cached_size:
+            return False
+    return True
+
+
+def cache_store(item: str, src: Path, details: dict):
+    CFG.cache_dir.mkdir(parents=True, exist_ok=True)
+    staging = CFG.cache_dir / f".{item}.updating"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    shutil.copytree(src, staging)
+    meta = {
+        "schema": 1,
+        "workshop_id": item,
+        "title": details.get("title", ""),
+        "source_file_size": int(details.get("size") or 0),
+        "time_updated": details.get("time_updated"),
+        "cached_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "tree_size": file_tree_size(staging),
+    }
+    (staging / ".bo3ps4-cache.json").write_text(
+        json.dumps(meta, indent=1, ensure_ascii=False), encoding="utf-8"
+    )
+    dest = CFG.cache_dir / item
+    if dest.exists():
+        previous = CFG.cache_dir / f".{item}.previous-{time.strftime('%Y%m%d-%H%M%S')}"
+        dest.replace(previous)
+    staging.replace(dest)
+
+
+def confirm_action(prompt: str, yes: bool = False) -> bool:
+    if yes:
+        return True
+    try:
+        return input(prompt + " [y/N] ").strip().lower() in {"y", "yes"}
+    except EOFError:
+        return False
+
+
+def cache_entries() -> list[tuple[str, Path, dict, int, float]]:
+    if not CFG.cache_dir.exists():
+        return []
+    entries = []
+    for path in sorted(CFG.cache_dir.iterdir()):
+        if not path.is_dir() or not path.name.isdigit():
+            continue
+        entries.append((
+            path.name, path, read_cache_meta(path.name),
+            file_tree_size(path), path.stat().st_mtime,
+        ))
+    return entries
+
+
+def cache_source(item: str, details: dict, log_path: Path, no_download: bool = False) -> Path:
+    if cache_valid(item, details):
+        print(f"  reusing cached Workshop map {item} from {CFG.cache_dir / item}")
+        return CFG.cache_dir / item
+    if no_download:
+        steam_src = workshop_dir(item)
+        if steam_src.is_dir() and map_zone(steam_src) is not None:
+            cache_store(item, steam_src, details)
+            return CFG.cache_dir / item
+        raise RuntimeError(f"no valid cached/SteamCMD copy for Workshop item {item}")
+    if (CFG.cache_dir / item).exists():
+        print(f"  cached Workshop version for {item} is stale or unverified; refreshing from SteamCMD")
+    downloaded = download(item, log_path)
+    cache_store(item, downloaded, details)
+    return CFG.cache_dir / item
+
+
+def delete_cache(item: str, include_zones: bool = False, yes: bool = False):
+    entries = cache_entries()
+    if item == "--all":
+        targets = [path for _, path, _, _, _ in entries]
+    else:
+        target = CFG.cache_dir / item
+        targets = [target] if target.is_dir() else []
+    if not targets:
+        print(f"cache: no matching cached map(s) in {CFG.cache_dir}")
+        return
+    total = sum(file_tree_size(p) for p in targets)
+    labels = ", ".join(p.name for p in targets)
+    print(f"cache clean will delete {len(targets)} map folder(s), {total / 2**30:.2f} GB: {labels}")
+    if include_zones:
+        print(f"  PLUS pulled PS4 zones: {CFG.zones}")
+    if not confirm_action("Continue?", yes):
+        print("cancelled")
+        return
+    for path in targets:
+        shutil.rmtree(path)
+    if include_zones and CFG.zones.exists():
+        shutil.rmtree(CFG.zones)
+    print("cache clean complete")
+
+
 def pc_game() -> Path:
     """The PC Black Ops III folder: from the config, else found through Steam's library list."""
     if CFG.pc_game:
