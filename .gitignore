@@ -1,16 +1,46 @@
-# your settings (PS4 address, paths, Steam account)
+# User settings / credentials / machine-specific paths
 config.json
+*.secret
+.env
+.env.*
+*.pem
+*.key
 
-# built / downloaded: never commit game files or binaries built from them
+# Built, downloaded, cached or converted game content
 ffport/
 upstream/
 *.zip
 *.ff
+*.fd
 *.xpak
 *.sabl
 *.sabs
+work/
+workdir/
+cache/
+porter-work/
+ps4-zones/
+evidence/
+tests/output/
 
-# logs and local results (they can contain your Steam account name)
+# Sony PS4 SDK / compiler paths and binaries: local only, never redistribute
+**/SCE/ORBIS SDKs/
+**/orbis-wave-psslc.exe
+**/orbis-image2gnf.exe
+psslc/
+sdk/
+
+# Logs, reports, account-identifying or machine-local evidence
 *.log
+*.dmp
+*.pcap
 compat.json
+*.fidelity.json
+substitutions.json
 __pycache__/
+.pytest_cache/
+
+# Temporary upload/update material
+*.part
+*.updating
+*.previous-*
