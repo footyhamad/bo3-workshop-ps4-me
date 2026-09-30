@@ -699,9 +699,13 @@ def workshop_details(ids: list[str]) -> dict[str, dict]:
     except (OSError, KeyError, ValueError) as e:
         print(f"  (Steam details unavailable: {e})")
         return {}
-    return {d["publishedfileid"]: {"title": d.get("title", ""), "size": int(d.get("file_size", 0) or 0),
-                                   "app": str(d.get("consumer_app_id", "")), "tags": [t["tag"] for t in d.get("tags", [])]}
-            for d in items if d.get("result") == 1}
+    return {d["publishedfileid"]: {
+        "title": d.get("title", ""),
+        "size": int(d.get("file_size", 0) or 0),
+        "time_updated": d.get("time_updated"),
+        "app": str(d.get("consumer_app_id", "")),
+        "tags": [t["tag"] for t in d.get("tags", [])],
+    } for d in items if d.get("result") == 1}
 
 
 def steam_user() -> str:
@@ -745,25 +749,6 @@ def _vdf_dump(node: dict, depth: int = 0) -> str:
     return "\n".join(out) + "\n"
 
 
-def prune_workshop_record():
-    """Forgets Workshop items whose files are gone (--cleanup deletes finished downloads). SteamCMD otherwise reuses
-    shared chunks from them and fails: 'reading chunk ... (File Not Found) (Missing game files)'."""
-    acf = CFG.steamcmd.parent / "steamapps" / "workshop" / f"appworkshop_{APP_ID}.acf"
-    if not acf.exists():
-        return
-    data = _vdf_parse(acf.read_text(encoding="utf-8", errors="replace"))
-    root = data.get("AppWorkshop", {})
-    gone = [i for i in root.get("WorkshopItemsInstalled", {}) if not (CFG.workshop / i).is_dir()]
-    if not gone:
-        return
-    for section in ("WorkshopItemsInstalled", "WorkshopItemDetails"):
-        for i in gone:
-            root.get(section, {}).pop(i, None)
-    shutil.copy2(acf, acf.with_suffix(".acf.bak"))
-    acf.write_text(_vdf_dump(data), encoding="utf-8")
-    print(f"  SteamCMD record: forgot {len(gone)} deleted item(s)")
-
-
 def download(item: str, log_path: Path) -> Path:
     """Downloads (or re-validates) a Workshop item with SteamCMD's saved login; never prompts."""
     cmd = [str(CFG.steamcmd), "+login", steam_user(), "+workshop_download_item", APP_ID, item, "validate", "+quit"]
@@ -771,7 +756,6 @@ def download(item: str, log_path: Path) -> Path:
     # SteamCMD abandons a Workshop download after ~5 minutes ("Timeout downloading item") even while data flows;
     # running it again resumes, so big maps take several rounds.
     for attempt in range(1, 31):
-        prune_workshop_record()
         with open(log_path, "a", encoding="utf-8") as log:
             log.write(f"\n$ steamcmd +login *** +workshop_download_item {APP_ID} {item} validate +quit  (try {attempt})\n")
             proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
