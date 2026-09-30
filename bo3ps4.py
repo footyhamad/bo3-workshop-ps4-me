@@ -55,7 +55,8 @@ DONOR_EXCLUDE = ("cp_doa_bo3_patch.",)
 # ---------------------------------------------------------------- config
 
 class Config:
-    # Keep legacy configs working: workdir may be empty and defaults safely.\n    REQUIRED = ("ps4_ip", "steamcmd")
+    # Keep legacy configs working: workdir may be empty and defaults safely.
+    REQUIRED = ("ps4_ip", "steamcmd")
     PROGRESS_MODES = {"auto", "tty", "plain", "json"}
 
     def __init__(self, path: Path):
