@@ -15,6 +15,18 @@ def make_config(tmp_path: Path) -> Path:
     return p
 
 
+def test_legacy_empty_workdir_defaults_to_repo_workdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(bo3ps4, "HERE", tmp_path)
+    p = tmp_path / "legacy.json"
+    p.write_text(json.dumps({
+        "ps4_ip": "127.0.0.1",
+        "workdir": "",
+        "steamcmd": "steamcmd/steamcmd.exe",
+    }), encoding="utf-8")
+    cfg = Config(p)
+    assert cfg.workdir == tmp_path / "workdir"
+
+
 def test_config_defaults_are_backward_compatible(tmp_path):
     bo3ps4.CFG = Config(make_config(tmp_path))
     assert bo3ps4.CFG.keep_cache is True
