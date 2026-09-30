@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "maps": [
+    {"id": "2112576356", "tags": ["known-good", "large"]},
+    {"id": "798643901", "tags": ["known-good", "popular"]},
+    {"id": "1168113418", "tags": ["known-good"]},
+    {"id": "1128166280", "tags": ["known-crasher", "missing-asset"]},
+    {"id": "780404984", "tags": ["known-fail", "shader", "script"]}
+  ]
+}
