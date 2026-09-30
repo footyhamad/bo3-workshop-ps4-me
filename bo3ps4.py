@@ -825,10 +825,7 @@ def port_one(item: str, details: dict, langs: list[str], a) -> bool:
         free = shutil.disk_usage(CFG.out).free / 2**30
         if free < need:
             raise RuntimeError(f"only {free:.0f} GB free in {CFG.out}, want {need:.0f} GB")
-        src = workshop_dir(item)
-        if not a.no_download:
-            print("  downloading with SteamCMD ...", flush=True)
-            src = download(item, log_path)
+        src = cache_source(item, details, log_path, a.no_download)
         ff = map_zone(src) if src.is_dir() else None
         if ff is None:
             raise RuntimeError(f"no map .ff in {src} (a mod or weapon pack, not a map?)")
@@ -862,11 +859,8 @@ def port_one(item: str, details: dict, langs: list[str], a) -> bool:
             return True
         record(item, stage="pushed", push_s=round(time.time() - t2), in_game="untested", error="")
         print(f"  on the PS4 ({s['score']}%, {size_out / 2**30:.1f} GB) in {(time.time() - t0) / 60:.0f} min total")
-        if a.cleanup:  # it's on the PS4; failed maps keep their download for a retry
-            shutil.rmtree(out, ignore_errors=True)
-            shutil.rmtree(CFG.work / "t7" / stem, ignore_errors=True)
-            if src.is_relative_to(CFG.workshop):
-                shutil.rmtree(src, ignore_errors=True)
+        if a.cleanup:
+            delete_cache(item, yes=getattr(a, "yes", False))
         return True
     except (RuntimeError, OSError, subprocess.TimeoutExpired, ftplib.Error) as e:
         record(item, stage="error", error=str(e))
@@ -894,9 +888,7 @@ def cmd_push_pending(a):
         push_map(out)
         record(item, stage="pushed", push_s=round(time.time() - t), in_game=r.get("in_game") or "untested", error="")
         if a.cleanup:
-            shutil.rmtree(out, ignore_errors=True)
-            shutil.rmtree(CFG.work / "t7" / r["map"], ignore_errors=True)
-            shutil.rmtree(workshop_dir(item), ignore_errors=True)
+            delete_cache(item, yes=getattr(a, "yes", False))
     print("Restart BO3 to see them under CUSTOM.")
 
 
@@ -916,6 +908,29 @@ def cmd_port(a):
     cmd_compat(a)
 
 
+def cmd_cache(a):
+    if a.action == "list":
+        entries = cache_entries()
+        if not entries:
+            print(f"no cached maps in {CFG.cache_dir}")
+            return
+        for item, path, meta, size, mtime in entries:
+            stamp = meta.get("time_updated") or meta.get("cached_at") or time.strftime(
+                "%Y-%m-%d %H:%M", time.localtime(mtime)
+            )
+            title = meta.get("title") or "?"
+            print(f"{item:>12}  {size / 2**30:7.2f} GB  {stamp:19}  {title}")
+        return
+    if a.action == "clean":
+        if a.all and a.id:
+            sys.exit("choose either an ID or --all, not both")
+        item = "--all" if a.all else a.id
+        if not item:
+            sys.exit("cache clean requires an ID or --all")
+        delete_cache(item, include_zones=a.include_zones, yes=a.yes)
+        return
+
+
 def cmd_status(_):
     try:
         with ftp() as f:
@@ -932,6 +947,8 @@ def main():
     global CFG
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default=str(HERE / "config.json"))
+    p.add_argument("--progress", choices=["auto", "tty", "plain", "json"], default=None,
+                   help="progress output mode; json emits one event per line")
     sub = p.add_subparsers(required=True)
     sub.add_parser("doctor", help="check the setup").set_defaults(fn=cmd_doctor)
     s = sub.add_parser("deps", help="upload the mod's runtime pack"); s.add_argument("--force", action="store_true")
@@ -942,10 +959,13 @@ def main():
     s.add_argument("ids", nargs="*"); s.add_argument("--file", help="text file, one Workshop ID per line")
     s.add_argument("--no-download", action="store_true", help="use the copy already downloaded")
     s.add_argument("--no-push", action="store_true", help="convert only")
-    s.add_argument("--cleanup", action="store_true", help="after uploading, delete the converted copy and the download")
+    s.add_argument("--cleanup", action="store_true", help="after upload, delete this map's retained cache")
+    s.add_argument("--yes", action="store_true", help="skip cleanup confirmation")
     s.set_defaults(fn=cmd_port)
     s = sub.add_parser("push-pending", help="upload maps that converted while the PS4 was unreachable")
-    s.add_argument("--cleanup", action="store_true"); s.set_defaults(fn=cmd_push_pending)
+    s.add_argument("--cleanup", action="store_true", help="after upload, delete the retained Workshop cache")
+    s.add_argument("--yes", action="store_true", help="skip cleanup confirmation")
+    s.set_defaults(fn=cmd_push_pending)
     sub.add_parser("compat", help="every map tried").set_defaults(fn=cmd_compat)
     s = sub.add_parser("mark", help="record how a map played"); s.add_argument("id")
     s.add_argument("result", choices=["ok", "crash", "broken"]); s.add_argument("note", nargs="?")
@@ -954,9 +974,20 @@ def main():
     s.add_argument("--languages", default="en"); s.set_defaults(fn=cmd_convert)
     s = sub.add_parser("push", help="upload a converted map"); s.add_argument("map"); s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_push)
+    s = sub.add_parser("cache", help="list or explicitly clean retained Workshop cache")
+    cs = s.add_subparsers(dest="action", required=True)
+    cs.add_parser("list", help="show cached Workshop maps, size and date")
+    cc = cs.add_parser("clean", help="delete cached map folders after confirmation")
+    cc.add_argument("id", nargs="?")
+    cc.add_argument("--all", action="store_true")
+    cc.add_argument("--include-zones", action="store_true", help="also delete the pulled PS4 zones")
+    cc.add_argument("--yes", action="store_true", help="skip confirmation")
+    s.set_defaults(fn=cmd_cache)
     sub.add_parser("status", help="what's on the PS4").set_defaults(fn=cmd_status)
     a = p.parse_args()
     CFG = Config(Path(a.config))
+    if a.progress:
+        CFG.progress_mode = a.progress
     a.fn(a)
 
 
