@@ -22,6 +22,7 @@ Writes on the PS4 go only to /data/BO3-Customs, plus GoldHEN's config.ini/plugin
 """
 import argparse
 import ftplib
+import hashlib
 import io
 import json
 import os
@@ -129,6 +130,14 @@ def file_tree_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file()) if root.exists() else 0
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(4 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def cache_meta_path(item: str) -> Path:
     return CFG.cache_dir / item / ".bo3ps4-cache.json"
 
@@ -169,12 +178,17 @@ def cache_store(item: str, src: Path, details: dict):
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
     shutil.copytree(src, staging)
+    source = map_zone(staging)
+    if source is None:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise RuntimeError(f"downloaded Workshop item {item} contains no map .ff")
     meta = {
         "schema": 1,
         "workshop_id": item,
         "title": details.get("title", ""),
         "source_file_size": int(details.get("size") or 0),
         "time_updated": details.get("time_updated"),
+        "source_sha256": sha256_file(source),
         "cached_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "tree_size": file_tree_size(staging),
     }
@@ -893,35 +907,137 @@ def download(item: str, log_path: Path) -> Path:
 
 # ---------------------------------------------------------------- compatibility list
 
-def load_compat() -> dict:
-    return json.loads(CFG.compat.read_text(encoding="utf-8")) if CFG.compat.exists() else {}
+COMPAT_SCHEMA = 2
 
+def _compat_document() -> dict:
+    if not CFG.compat.exists():
+        return {"schema_version": COMPAT_SCHEMA, "maps": {}}
+    try:
+        raw = json.loads(CFG.compat.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"invalid compatibility database {CFG.compat}: {e}") from e
+    if isinstance(raw, dict) and raw.get("schema_version") == COMPAT_SCHEMA and isinstance(raw.get("maps"), dict):
+        return raw
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"invalid compatibility database {CFG.compat}: expected a JSON object")
+    migrated = {"schema_version": COMPAT_SCHEMA, "maps": {}, "migrated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    for item, legacy in raw.items():
+        if not isinstance(legacy, dict):
+            legacy = {"legacy_value": legacy}
+        migrated["maps"][str(item)] = {
+            "id": str(item),
+            "source": {"type": "workshop", "id": str(item), "hash": legacy.get("source_hash", "")},
+            "tool_version": legacy.get("tool_version", "legacy"),
+            "status": legacy.get("stage", "unknown"),
+            "failure_class": legacy.get("failure_class", ""),
+            "substitutions_used": legacy.get("substitutions_used", []),
+            "ui_status": legacy.get("ui_status", "unverified"),
+            "perk_status": legacy.get("perk_status", "unverified"),
+            "weapon_status": legacy.get("weapon_status", "unverified"),
+            "sound_status": legacy.get("sound_status", "unverified"),
+            "tier_reached": legacy.get("tier_reached", "none"),
+            "date": legacy.get("updated", ""),
+            "legacy": legacy,
+        }
+    return migrated
+
+def save_compat_document(document: dict):
+    CFG.compat.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CFG.compat.with_suffix(CFG.compat.suffix + ".part")
+    tmp.write_text(json.dumps(document, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(CFG.compat)
+
+def load_compat() -> dict:
+    document = _compat_document()
+    if document.get("migrated_at"):
+        save_compat_document(document)
+    return document["maps"]
 
 def record(item: str, **fields):
-    db = load_compat()
-    db.setdefault(item, {}).update(fields, updated=time.strftime("%Y-%m-%d %H:%M"))
-    CFG.compat.parent.mkdir(parents=True, exist_ok=True)
-    CFG.compat.write_text(json.dumps(db, indent=1, ensure_ascii=False), encoding="utf-8")
+    document = _compat_document()
+    entry = document["maps"].setdefault(item, {
+        "id": item,
+        "source": {"type": "workshop", "id": item, "hash": ""},
+        "tool_version": "unverified",
+        "status": "unknown",
+        "failure_class": "",
+        "substitutions_used": [],
+        "ui_status": "unverified",
+        "perk_status": "unverified",
+        "weapon_status": "unverified",
+        "sound_status": "unverified",
+        "tier_reached": "none",
+        "date": "",
+    })
+    entry.update(fields)
+    if "source_hash" in fields:
+        entry.setdefault("source", {})["hash"] = fields["source_hash"]
+    entry["date"] = time.strftime("%Y-%m-%d %H:%M")
+    if "stage" in fields:
+        entry["status"] = fields["stage"]
+    save_compat_document(document)
 
+def generate_compatibility_markdown(maps: dict) -> str:
+    rows = [
+        "# Compatibility",
+        "",
+        "Generated from the versioned compatibility database by the compat --write command.",
+        "",
+        "| Workshop ID | Map | Conversion | In game | Tier | Failure class | Notes |",
+        "|---:|---|---|---|---|---|---|",
+    ]
+    for item, r in sorted(maps.items()):
+        notes = r.get("notes") or r.get("note") or ((r.get("problems") or [""])[0])
+        rows.append(
+            f"| {item} | {str(r.get("map", "?")).replace("|", "/")} | "
+            f"{("yes" if r.get("stage") in ("converted", "pushed") else "no")} | "
+            f"{r.get("in_game", "")} | {r.get("tier_reached", "none")} | "
+            f"{str(r.get("failure_class", "")).replace("|", "/")} | {str(notes).replace("|", "/")} |"
+        )
+    return "\n".join(rows) + "\n"
 
 def cmd_compat(a):
-    db = load_compat()
-    if not db:
-        print("no maps tried yet")
+    maps = load_compat()
+    if a.write:
+        Path(HERE / "COMPATIBILITY.md").write_text(generate_compatibility_markdown(maps), encoding="utf-8")
+        print(f"wrote {HERE / "COMPATIBILITY.md"}")
         return
-    print(f"{'id':>11}  {'map':22} {'stage':10} {'score':>5} {'in game':8} title / first problem")
-    for item, r in sorted(db.items(), key=lambda kv: kv[1].get("updated", "")):
-        why = (r.get("problems") or [r.get("error", "")])[0] if r.get("stage") != "pushed" else ""
-        print(f"{item:>11}  {r.get('map', '?'):22} {r.get('stage', '?'):10} {str(r.get('score') or ''):>5} "
-              f"{r.get('in_game', ''):8} {r.get('title', '')[:34]}" + (f" | {why[:90]}" if why else ""))
+    selected = list(maps.items())
+    if a.status:
+        selected = [(i, r) for i, r in selected if r.get("status", r.get("stage")) == a.status or r.get("stage") == a.status]
+    if a.failure:
+        selected = [(i, r) for i, r in selected if r.get("failure_class") == a.failure]
+    if not selected:
+        print("no maps match")
+        return
+    print(f"{'id':>11}  {'map':22} {'stage':10} {'tier':5} {'in game':8} failure / note")
+    for item, r in sorted(selected, key=lambda kv: kv[1].get("date", kv[1].get("updated", ""))):
+        why = (r.get("problems") or [r.get("error", "")])[0] if r.get("status", r.get("stage")) != "pushed" else ""
+        print(f"{item:>11}  {r.get('map', '?'):22} {r.get('stage', r.get('status', '?')):10} {r.get('tier_reached', 'none'):5} {r.get('in_game', ''):8} {why[:110]}")
 
+def cmd_compat_export(a):
+    document = _compat_document()
+    Path(a.path).write_text(json.dumps(document, indent=1, ensure_ascii=False), encoding="utf-8")
+    print(f"exported {len(document["maps"])} map record(s) to {a.path}")
+
+def cmd_compat_import(a):
+    try:
+        incoming = json.loads(Path(a.path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"could not read compatibility import: {e}")
+    if not isinstance(incoming, dict) or not isinstance(incoming.get("maps"), dict):
+        sys.exit("compat import expects a schema-versioned document with a maps object")
+    document = _compat_document()
+    document["maps"].update(incoming["maps"])
+    document["schema_version"] = COMPAT_SCHEMA
+    save_compat_document(document)
+    print(f"imported {len(incoming["maps"])} map record(s)")
 
 def cmd_mark(a):
     if a.id not in load_compat():
         sys.exit(f"{a.id} is not in {CFG.compat}")
     record(a.id, in_game=a.result, note=a.note or "")
     print(f"{a.id}: {a.result}")
-
 
 # ---------------------------------------------------------------- port
 
@@ -1083,7 +1199,17 @@ def main():
     s.add_argument("--cleanup", action="store_true", help="after upload, delete the retained Workshop cache")
     s.add_argument("--yes", action="store_true", help="skip cleanup confirmation")
     s.set_defaults(fn=cmd_push_pending)
-    sub.add_parser("compat", help="every map tried").set_defaults(fn=cmd_compat)
+    s = sub.add_parser("compat", help="show compatibility records")
+    s.add_argument("--status")
+    s.add_argument("--failure")
+    s.add_argument("--write", action="store_true", help="regenerate COMPATIBILITY.md from the DB")
+    s.set_defaults(fn=cmd_compat)
+    s = sub.add_parser("compat-export", help="export the compatibility DB without game files")
+    s.add_argument("path")
+    s.set_defaults(fn=cmd_compat_export)
+    s = sub.add_parser("compat-import", help="merge a previously exported compatibility DB")
+    s.add_argument("path")
+    s.set_defaults(fn=cmd_compat_import)
     s = sub.add_parser("mark", help="record how a map played"); s.add_argument("id")
     s.add_argument("result", choices=["ok", "crash", "broken"]); s.add_argument("note", nargs="?")
     s.set_defaults(fn=cmd_mark)
