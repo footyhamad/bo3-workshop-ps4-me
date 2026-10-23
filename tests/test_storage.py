@@ -83,3 +83,27 @@ def test_recover_interrupted_jobs_requeues_without_touching_partial_files(tmp_pa
         assert row["status"] == JobStatus.QUEUED.value
         assert "partial data was preserved" in row["message"].lower()
     assert steam_partial.read_bytes() == b"keep these bytes"
+
+
+def test_resume_old_jobs_requeues_only_failed_and_cancelled_rows(tmp_path):
+    history = JobHistory(tmp_path / "history.sqlite3")
+    rows = {
+        "201": JobStatus.FAILED,
+        "202": JobStatus.CANCELLED,
+        "203": JobStatus.COMPLETED,
+        "204": JobStatus.QUEUED,
+    }
+    for item_id, status in rows.items():
+        history.ensure_item(WorkshopItem(item_id, title=f"Item {item_id}"))
+        if status != JobStatus.QUEUED:
+            history.update(DownloadEvent(item_id, status, message="old status"))
+
+    partial = tmp_path / "steamapps" / "workshop" / "downloads" / "311210" / "201" / "part.bin"
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"resume these bytes")
+
+    assert history.requeue_retryable() == 2
+    assert {row["workshop_id"] for row in history.pending_items()} == {"201", "202", "204"}
+    assert history.get("203")["status"] == JobStatus.COMPLETED.value
+    assert history.get("201")["status"] == JobStatus.QUEUED.value
+    assert partial.read_bytes() == b"resume these bytes"
