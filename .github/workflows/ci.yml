@@ -3,30 +3,59 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  python:
+  tests:
+    name: Tests (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install project and test tools
+        run: python -m pip install -e ".[dev]"
+      - name: Compile all project and test modules
+        run: python -m compileall -q src tests scripts
+      - name: Lint
+        run: ruff check src tests scripts
+      - name: Run tests
+        run: python -m pytest -q --cov=bo3wd --cov-report=term-missing
+
+  windows-executable:
+    name: Build Windows GUI executable
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Install pinned test dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install -e ".[build,dev]"
+      - name: Compile source
+        run: python -m compileall -q src tests scripts
       - name: Run unit tests
         run: python -m pytest -q
-
-  ffport:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Package GUI
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name BO3WorkshopDownloader --paths src scripts\launcher.py
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
         with:
-          python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-      - name: Verify patched FFPorter builds from clean upstream v1.50
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts\build-ffport.ps1
+          name: BO3WorkshopDownloader-windows-x64
+          path: dist/BO3WorkshopDownloader.exe
+          if-no-files-found: error

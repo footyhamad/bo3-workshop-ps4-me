@@ -1,123 +1,107 @@
-# bo3-workshop-ps4
+# BO3 Workshop Downloader — v2
 
-Play Black Ops III **Steam Workshop Zombies maps on a jailbroken PS4**, with one command per map:
+A clean, standalone Windows-first rewrite of a Black Ops III Steam Workshop downloader. It wraps **your own SteamCMD installation**; it does not download game files from third-party mirrors, bypass Steam authentication, or delete Workshop caches to “fix” a failed transfer.
 
-```
-py bo3ps4.py port 2112576356      # LEVIATHAN: download -> convert -> upload -> it appears under CUSTOM in BO3
-```
+## What it does
 
-It downloads the map with SteamCMD, converts it for the PS4, checks the result, uploads it over FTP, and keeps a list
-of which maps work. Several of the most popular Workshop maps play on a real console with it (see
-[COMPATIBILITY.md](COMPATIBILITY.md)).
-
-**For your own copies, offline only.** You need the game on both PC (Steam) and PS4. Don't take a modded console
-online, and don't share converted maps: they contain the map authors' work and Activision's assets. This repository
-contains no game files.
-
-## Built on PS4-BO3-Customs
-
-The hard parts are [ItsJokerZz/PS4-BO3-Customs](https://github.com/ItsJokerZz/PS4-BO3-Customs) (MIT):
-
-- **FFPorter**, the converter that turns PC fastfiles into PS4 ones, and
-- **BO3-Customs.sprx**, the in-game mod that loads custom maps and adds the CUSTOM tab to Zombies map select.
-
-This project adds:
-
-- **Fixes to FFPorter** ([patches/](patches)), so conversions work without Sony's PS4 SDK shader compiler, using
-  shaders from your own console's game files instead:
-  - the command line accepts its own shipped PC image (v1.50's `convert` always failed);
-  - technique sets inside texture combos and embedded in materials are taken from PS4 zones;
-  - PS4 zones store shader data once and share it; the shared data is carried along, and copies that share data
-    with models are avoided;
-  - technique sets the retail PS4 game never shipped (DLC-only or mod-tools-made) use the nearest PS4 one that
-    only **drops** features (a substitute that adds features samples textures the material lacks, and crashes);
-  - a GSC opcode table fix (`WaitTill` takes a count byte) and a PS4 stand-in for the PC-only
-    `clearallcharactertables`;
-  - lower memory use while checking big maps.
-- **The pipeline** ([bo3ps4.py](bo3ps4.py)): SteamCMD downloads (resuming its 5-minute timeouts), the console's
-  language zones (an EU Spanish/Italian copy loads `es_`/`it_` zones and crashes without them), GoldHEN plugin
-  loading, uploads, and a compatibility list.
+- **Resumes through SteamCMD itself.** On timeouts/network failures, it reruns the same Workshop request so SteamCMD can reuse its partial chunks. The downloader never deletes `steamapps/workshop/downloads/311210/<id>` or downloaded content as part of retries.
+- **Bounded retries.** Per-attempt watchdog, capped exponential backoff, and a no-progress guard prevent infinite loops. Authentication and explicit access/item errors stop early with a useful message.
+- **Conservative success checks.** A job is only marked complete when SteamCMD reports success for the exact requested ID, exits successfully, and the resulting content directory contains files. An old folder or a successful-looking log line alone is not enough.
+- **Live output and durable diagnostics.** SteamCMD output is streamed into a per-item log. The UI shows approximate progress from Steam's reported item size, observed disk throughput, and an ETA when enough data exists. Progress is labelled *estimated* because Workshop item size and on-disk bytes are not guaranteed to match exactly.
+- **Queue and history persist.** The UI queue/history is stored in SQLite; preferences are atomically written to JSON. Interrupted jobs are recovered into the queue after an abnormal exit. Closing or stopping the app does not clean up partial data.
+- **ID and URL input.** Paste one ID, a Steam Workshop URL, or a newline/comma/semicolon-separated list. Duplicate IDs are removed. A text list can be imported from disk.
+- **No third-party runtime dependencies.** The app uses Python's standard library and Tkinter. Tests use pytest; the Windows executable is built with PyInstaller.
 
 ## Requirements
 
-- **PS4** on a GoldHEN-supported firmware, with **GoldHEN 2.3+** (plugin loader and FTP), and **Black Ops III
-  v1.33**. Tested: EU `CUSA02626` on 7.55. Other regions should work (the mod checks the game's code before it
-  hooks anything), but are untested.
-- **Windows PC** with:
-  - **Black Ops III on Steam** (the converter reads the PC game's files); ~120 GB.
-  - **SteamCMD**, logged in once with the Steam account that owns BO3.
-  - **Python 3.10+**, **git**, and the **.NET 10 SDK** (to build the converter).
-  - **16 GB RAM** (big maps use ~8-10 GB while converting) and **~40 GB free** for the work folder.
-- PC and PS4 on the **same network**. A VPN on the PC can route the PS4's address into the tunnel; turn it off.
+- Windows 10/11 (primary target), Python 3.11+ for running from source.
+- SteamCMD installed locally and initialized once with the Steam account that owns/has access to the item.
+- Black Ops III Workshop AppID `311210`; this application intentionally does not accept a different game AppID.
+- Enough free disk space for the Workshop item. Large items may require many gigabytes.
 
-## Setup
+## Install and run from source
 
-1. **Get this repo** and build the patched converter:
-   ```
-   git clone https://github.com/luckeyfaraday/bo3-workshop-ps4 && cd bo3-workshop-ps4
-   powershell -ExecutionPolicy Bypass -File scripts\build-ffport.ps1
-   ```
-   It clones PS4-BO3-Customs v1.50, applies [patches/](patches), and builds `ffport\ffport.exe`.
-2. **Download `Console.zip`** from the [PS4-BO3-Customs v1.50 release](https://github.com/ItsJokerZz/PS4-BO3-Customs/releases/tag/v1.50)
-   into `upstream\` (the in-game mod, its UI scripts and the shared `zm_levelcommon` zone).
-3. **Configure:** copy `config.example.json` to `config.json` and set `ps4_ip` and `steamcmd`. `pc_game` and `title_id`
-   are found automatically when left empty/`auto`. Legacy configs are accepted: an empty `workdir` now defaults to a
-   repo-local `workdir`.
-4. **SteamCMD login**, once, by hand (it asks for your password and Steam Guard code, then remembers the login):
-   ```
-   D:\steamcmd\steamcmd.exe +login <your Steam account> +quit
-   ```
-5. **PS4 side** (GoldHEN running):
-   ```
-   py bo3ps4.py deps        # the mod's runtime pack -> /data/BO3-Customs
-   py bo3ps4.py loader      # GoldHEN's plugins.ini loads the mod into BO3 (backs up GoldHEN's files first)
-   ```
-   Turn on **Settings > GoldHEN > Plugins** if it is off.
-6. **Start Black Ops III on the PS4**, then copy its zones (read-only, ~8 GB; the converter takes shaders from them):
-   ```
-   py bo3ps4.py pull-zones
-   ```
-7. `py bo3ps4.py doctor` should say *all good*.
+Open PowerShell in the repository folder:
 
-## Use
-
-```
-py bo3ps4.py port 1168113418 798643901            # one or more Workshop IDs
-py bo3ps4.py port --file maps.txt --cleanup       # a list; --cleanup deletes only the managed Workshop cache after upload
-py bo3ps4.py compat                               # what converted, what failed and why
-py bo3ps4.py mark 798643901 ok                    # after playing it
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+python -m bo3wd
 ```
 
-Then **close BO3 completely and start it again** (the mod scans for maps when it loads): Zombies > map select >
-**CUSTOM**.
+Select your actual SteamCMD executable, for example `B:\scmd\steamcmd.exe`, and enter the Steam account name used for the saved SteamCMD login. If you have not initialized SteamCMD yet, run `steamcmd.exe +login <account> +quit` manually once and complete Steam Guard there. The app disables stdin for managed attempts so an unexpected password prompt cannot hang a background worker.
 
-The first map takes longer (~20 minutes for a small one): the converter indexes your PS4 and PC game zones once
-and caches them in the workdir. After that a small map takes a few minutes, and LEVIATHAN ~25 minutes including
-download and upload.
+The UI is the default when run without arguments. The main window has settings, an ID/URL entry box, file import, a persistent queue/history table, retry/remove controls, a live log pane, and buttons to open the logs or a selected item’s content folder.
 
-## When a map doesn't work
+## CLI
 
-- **Fails to convert:** `compat` shows the first problem; the full log is in `workdir\out\<map>.log`.
-- **Crashes in game:** turn on GoldHEN's `TTYRedirect` so the game's own errors reach the kernel log, record the log
-  (klog on port 3232) while it crashes, and open an issue with the log and the Workshop ID. Crashes so far came from
-  shader substitutes and from assets the PS4 game doesn't have (Zombies Chronicles content).
-- **"PS4 unreachable":** GoldHEN not running, the PC on another network, or a VPN.
+```powershell
+# Check paths and saved account detection; this does not start a download
+python -m bo3wd doctor --steamcmd B:\scmd\steamcmd.exe --username YOUR_STEAM_ACCOUNT
 
-## How it works
+# Download one or more items
+python -m bo3wd download 3296316642 1234567890 `
+  --steamcmd B:\scmd\steamcmd.exe `
+  --username YOUR_STEAM_ACCOUNT
 
-The converter runs the real PC and PS4 zone loaders to rebuild every asset in the PS4 layout: textures retiled for
-the PS4 GPU, sounds re-encoded to MP3, GSC scripts remapped to PS4 opcodes, streamed data repacked. Shaders can't be
-recompiled without Sony's SDK, so each technique set is copied from your PS4's own game zones by name (or the nearest
-feature-dropping match). The mod then loads the result from `/data/BO3-Customs/usermaps` when BO3 starts.
+# Import from a text file using the GUI, or pass URLs directly to the CLI
+python -m bo3wd download "https://steamcommunity.com/sharedfiles/filedetails/?id=3296316642" `
+  --steamcmd B:\scmd\steamcmd.exe --username YOUR_STEAM_ACCOUNT
+```
 
-## Credits
+`bo3wd download --help` lists retry, watchdog, validation, verbosity and data-directory options. The CLI returns a nonzero exit code if any requested item fails.
 
-- **ItsJokerZz**: PS4-BO3-Customs (FFPorter and the BO3-Customs mod).
-- **flatz**: the ELF/fself tools the mod's build uses.
-- **ate47**: atian-cod-tools, which FFPorter uses to check converted scripts.
-- **The GoldHEN team**.
-- **The Workshop map authors**, whose maps these are.
+## Recovery behavior
 
-## License
+- An internal SteamCMD timeout causes a fresh SteamCMD invocation for the **same item**, not deletion of the partial directory.
+- A hung SteamCMD process is terminated by a watchdog. This does not remove or truncate the downloader's existing partial files.
+- Recognized authentication prompts stop immediately. Complete login/Steam Guard interactively once, then retry the item.
+- Explicit access-denied, missing-item and subscription errors stop immediately; the downloader does not attempt to bypass ownership or permissions.
+- Repeated attempts with no observed growth stop after the configured stagnant-attempt budget. The existing partial and completed content remain available for another manual retry. A process crash leaves job state recoverable on the next app launch.
+- `Stop current attempt` terminates the current SteamCMD process. Items not yet started remain queued. Use **Retry selected** to queue a cancelled/failed/completed row again; this only changes history/queue state.
 
-MIT (see [LICENSE](LICENSE)); the patches modify MIT-licensed PS4-BO3-Customs.
+## Data locations
+
+By default on Windows:
+
+- Settings: `%LOCALAPPDATA%\BO3WorkshopDownloader\settings.json`
+- Persistent queue/history: `%LOCALAPPDATA%\BO3WorkshopDownloader\history.sqlite3`
+- Logs: `%LOCALAPPDATA%\BO3WorkshopDownloader\logs\<workshop-id>.log`
+- SteamCMD content: `<SteamCMD folder>\steamapps\workshop\content\311210\<id>`
+- SteamCMD partial data: `<SteamCMD folder>\steamapps\workshop\downloads\311210\<id>`
+
+The SteamCMD paths are discovered relative to the executable you selected, including non-`C:` drives like `B:\scmd`. Cache files are intentionally not placed inside the app's own data folder.
+
+## Tests and debugging
+
+```powershell
+python -m compileall -q src tests
+python -m pytest -q
+ruff check src tests
+```
+
+The test suite uses synthetic SteamCMD runs and temporary directories. It covers ID parsing, URL validation, settings/database persistence, streaming logs, process watchdog/cancellation, authentication failures, permanent errors, success-marker verification, partial-data preservation, backoff/stagnation behavior and metadata response parsing. CI also builds the Windows executable.
+
+**What is not claimed:** automated tests cannot prove a live Steam download will succeed on your network or verify your individual Workshop item's contents. After CI passes, do one real download and inspect its generated per-item log. This repository intentionally includes no game files or downloaded Workshop content.
+
+## Build a Windows executable
+
+```powershell
+python -m pip install -e ".[build]"
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name BO3WorkshopDownloader --paths src scripts\launcher.py
+```
+
+Output: `dist\BO3WorkshopDownloader.exe`.
+
+## Project structure
+
+- `src/bo3wd/engine.py` — retry state machine, completion checks and progress telemetry.
+- `src/bo3wd/process.py` — streaming subprocess supervision, cancellation and watchdog.
+- `src/bo3wd/steamcmd.py` — SteamCMD discovery, saved-account lookup and safe argument construction.
+- `src/bo3wd/metadata.py` — public Workshop title/size metadata.
+- `src/bo3wd/storage.py` — atomic settings and SQLite queue/history.
+- `src/bo3wd/gui.py` — background-worker desktop interface.
+- `src/bo3wd/cli.py` — command-line interface and diagnostics.
+- `tests/` — offline regression tests; no Steam login or live download required.

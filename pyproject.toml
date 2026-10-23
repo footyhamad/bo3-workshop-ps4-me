@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bo3-workshop-downloader"
+version = "2.0.1"
+description = "A resilient Black Ops III Steam Workshop downloader for Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "BO3 Workshop Downloader contributors" }]
+keywords = ["Black Ops III", "SteamCMD", "Workshop", "downloader"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Games/Entertainment",
+]
+dependencies = []
+
+[project.scripts]
+bo3wd = "bo3wd.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<10", "pytest-cov>=5,<8", "ruff>=0.11,<1"]
+build = ["pyinstaller>=6.10,<7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]
