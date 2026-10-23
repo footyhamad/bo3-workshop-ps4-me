@@ -60,6 +60,8 @@ class DownloaderApp(tk.Tk):
         self.max_attempts_var = tk.StringVar(value=str(self.settings.get("max_attempts", 30)))
         self.timeout_var = tk.StringVar(value=str(self.settings.get("attempt_timeout_minutes", 15)))
         self.status_var = tk.StringVar(value="Ready · partial downloads are preserved")
+        self.progress_text_var = tk.StringVar(value="No active download")
+        self.progress_is_indeterminate = False
         self.item_entry_var = tk.StringVar()
 
         self._setup_style()
@@ -148,8 +150,8 @@ class DownloaderApp(tk.Tk):
         table_frame.pack(fill="both", expand=True)
         columns = ("id", "title", "status", "attempt", "progress", "received")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-        labels = {"id": "Workshop ID", "title": "Title", "status": "Status", "attempt": "Attempt", "progress": "Progress", "received": "Data seen"}
-        widths = {"id": 130, "title": 300, "status": 130, "attempt": 80, "progress": 100, "received": 120}
+        labels = {"id": "Workshop ID", "title": "Title", "status": "Status", "attempt": "Attempt", "progress": "Progress", "received": "Downloaded data"}
+        widths = {"id": 125, "title": 280, "status": 110, "attempt": 75, "progress": 100, "received": 190}
         for col in columns:
             self.table.heading(col, text=labels[col])
             self.table.column(col, width=widths[col], minwidth=70, stretch=(col == "title"))
@@ -158,9 +160,20 @@ class DownloaderApp(tk.Tk):
         self.table.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        progress_frame = tk.Frame(outer, bg="#111318")
+        progress_frame.pack(fill="x", pady=(8, 0))
+        tk.Label(
+            progress_frame, textvariable=self.progress_text_var,
+            bg="#111318", fg="#d1d9e6", anchor="w", font=("Segoe UI", 9, "bold")
+        ).pack(fill="x")
+        self.download_progress = ttk.Progressbar(
+            progress_frame, orient="horizontal", mode="determinate", maximum=100
+        )
+        self.download_progress.pack(fill="x", pady=(5, 0))
+
         controls = tk.Frame(outer, bg="#111318")
         controls.pack(fill="x", pady=(12, 6))
-        self.start_button = self._button(controls, "Start / Resume queue", self._start_queue, accent=True)
+        self.start_button = self._button(controls, "Install / Download queue", self._start_queue, accent=True)
         self.start_button.pack(side="left")
         self.stop_button = self._button(controls, "Stop current attempt", self._stop_queue)
         self.stop_button.pack(side="left", padx=7)
@@ -270,6 +283,71 @@ class DownloaderApp(tk.Tk):
         for row in reversed(self.history.list_jobs()):
             self._upsert_row(row)
 
+    @staticmethod
+    def _format_bytes(byte_count: int | float) -> str:
+        value = max(0.0, float(byte_count))
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1000 or unit == "TB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1000
+        return f"{value:.1f} TB"
+
+    def _update_download_progress(self, event: DownloadEvent) -> None:
+        stored = self.history.get(event.workshop_id) or {}
+        received = max(0, int(event.bytes_received))
+        expected = max(0, int(event.expected_bytes or stored.get("expected_bytes") or 0))
+        speed = max(0.0, float(event.speed_bytes_per_second))
+        eta = ""
+        if event.eta_seconds is not None and event.eta_seconds >= 0:
+            seconds = int(event.eta_seconds)
+            eta = f" · ETA {seconds // 60}m {seconds % 60:02d}s"
+
+        if event.status == JobStatus.DOWNLOADING:
+            if expected > 0:
+                if self.progress_is_indeterminate:
+                    self.download_progress.stop()
+                    self.progress_is_indeterminate = False
+                self.download_progress.configure(mode="determinate", maximum=100)
+                percent = min(100.0, received * 100.0 / expected)
+                self.download_progress.configure(value=percent)
+                data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
+                self.progress_text_var.set(
+                    f"{event.workshop_id}: {percent:.1f}% · {data_text}"
+                    + (f" · {self._format_bytes(speed)}/s" if speed > 0 else "")
+                    + eta
+                )
+            else:
+                self.download_progress.configure(mode="indeterminate")
+                if not self.progress_is_indeterminate:
+                    self.download_progress.start(12)
+                    self.progress_is_indeterminate = True
+                self.progress_text_var.set(
+                    f"{event.workshop_id}: {self._format_bytes(received)} downloaded"
+                    + (f" · {self._format_bytes(speed)}/s" if speed > 0 else "")
+                    + " · waiting for Steam's total-size metadata"
+                )
+        elif event.status == JobStatus.PREPARING:
+            self.progress_text_var.set(f"{event.workshop_id}: preparing SteamCMD…")
+        elif event.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+            if self.progress_is_indeterminate:
+                self.download_progress.stop()
+                self.progress_is_indeterminate = False
+            self.download_progress.configure(mode="determinate", maximum=100)
+            if event.status == JobStatus.COMPLETED:
+                self.download_progress.configure(value=100)
+                self.progress_text_var.set(
+                    f"{event.workshop_id}: download complete · {self._format_bytes(received)} downloaded"
+                )
+            else:
+                if expected > 0:
+                    self.download_progress.configure(value=min(100.0, received * 100.0 / expected))
+                    data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
+                else:
+                    data_text = f"{self._format_bytes(received)} received"
+                self.progress_text_var.set(
+                    f"{event.workshop_id}: {event.status.value} · {data_text}"
+                )
+
     def _upsert_row(self, row: dict[str, object] | DownloadEvent) -> None:
         if isinstance(row, DownloadEvent):
             item_id = row.workshop_id
@@ -281,7 +359,7 @@ class DownloaderApp(tk.Tk):
                 "attempt": row.attempt,
                 "max_attempts": row.max_attempts,
                 "bytes_received": row.bytes_received,
-                "expected_bytes": row.expected_bytes,
+                "expected_bytes": row.expected_bytes or stored.get("expected_bytes") or 0,
                 "message": row.message,
             }
         else:
@@ -294,10 +372,13 @@ class DownloaderApp(tk.Tk):
         max_attempts = int(data.get("max_attempts", 0) or 0)
         bytes_received = int(data.get("bytes_received", 0) or 0)
         expected_bytes = int(data.get("expected_bytes", 0) or 0)
-        progress = f"{min(100, bytes_received * 100 // expected_bytes)}%" if expected_bytes else "—"
-        received = f"{bytes_received / 1_000_000:.1f} MB" if bytes_received else "0 MB"
+        progress = f"{min(100, bytes_received * 100 // expected_bytes)}%" if expected_bytes else ("Downloading…" if status == JobStatus.DOWNLOADING.value else "—")
+        received = (
+            f"{self._format_bytes(bytes_received)} / {self._format_bytes(expected_bytes)}"
+            if expected_bytes else f"{self._format_bytes(bytes_received)} received"
+        )
         if isinstance(row, DownloadEvent) and row.speed_bytes_per_second > 0:
-            received += f" · {row.speed_bytes_per_second / 1_000_000:.2f} MB/s"
+            received += f" · {self._format_bytes(row.speed_bytes_per_second)}/s"
         title = str(data.get("title") or item_id)
         title = title.replace("\n", " ")[:85]
         values = (item_id, title, status.replace("_", " ").title(), f"{attempt}/{max_attempts or '—'}", progress, received)
@@ -486,13 +567,14 @@ class DownloaderApp(tk.Tk):
                 event = self.events.get_nowait()
                 if isinstance(event, DownloadEvent):
                     self._upsert_row(event)
+                    self._update_download_progress(event)
                     if event.speed_bytes_per_second > 0 and event.status == JobStatus.DOWNLOADING:
                         speed = event.speed_bytes_per_second / 1_000_000
                         eta = ""
                         if event.eta_seconds is not None:
                             seconds = int(event.eta_seconds)
                             eta = f" · ETA {seconds // 60}m {seconds % 60:02d}s"
-                        self.status_var.set(f"{event.workshop_id}: {speed:.2f} MB/s{eta} · estimated progress")
+                        self.status_var.set(f"{event.workshop_id}: {speed:.2f} MB/s{eta} · transfer rate is estimated")
                     elif event.message != "Transfer telemetry":
                         self.status_var.set(f"{event.workshop_id}: {event.message[:180]}")
                 elif event[0] == "refresh":
