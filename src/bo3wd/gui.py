@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import APP_NAME, __version__
 from .engine import DownloadEngine
 from .identifiers import parse_workshop_list
+from .integrity import IntegrityCheckError, discover_integrity_targets, write_integrity_report
 from .metadata import MetadataError, WorkshopMetadataClient
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
 from .steamcmd import discover_steamcmd, read_saved_account
@@ -337,22 +338,26 @@ class DownloaderApp(tk.Tk):
 
         utility_actions = tk.Frame(controls, bg="#111318")
         utility_actions.pack(fill="x", padx=5, pady=(0, 5))
-        for column in range(5):
+        for column in range(6):
             utility_actions.columnconfigure(column, weight=1, uniform="utility-actions")
         self._button(utility_actions, "Recover Partial Files", self._recover_partial_downloads).grid(
             row=0, column=0, sticky="ew", padx=4, pady=4
         )
-        self._button(utility_actions, "Remove Selected", self._remove_selected).grid(
-            row=0, column=1, sticky="ew", padx=4, pady=4
+        self.integrity_button = self._button(
+            utility_actions, "Check File Integrity", self._check_file_integrity,
         )
-        self._button(utility_actions, "Clear Finished", self._clear_finished).grid(
+        self.integrity_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        self._button(utility_actions, "Remove Selected", self._remove_selected).grid(
             row=0, column=2, sticky="ew", padx=4, pady=4
         )
-        self._button(utility_actions, "Open Download Folder", self._open_item_folder).grid(
+        self._button(utility_actions, "Clear Finished", self._clear_finished).grid(
             row=0, column=3, sticky="ew", padx=4, pady=4
         )
-        self._button(utility_actions, "Open Logs", self._open_logs).grid(
+        self._button(utility_actions, "Open Download Folder", self._open_item_folder).grid(
             row=0, column=4, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Open Logs", self._open_logs).grid(
+            row=0, column=5, sticky="ew", padx=4, pady=4
         )
 
         self.status_label = tk.Label(
@@ -719,6 +724,164 @@ class DownloaderApp(tk.Tk):
         for key, count in counts.items():
             self.summary_vars[key].set(str(count))
 
+    def _check_file_integrity(self) -> None:
+        """Run SteamCMD's native validation against already-installed Workshop items."""
+        if self.running or self.update_in_progress:
+            messagebox.showwarning(
+                "Downloader busy",
+                "Finish or pause the current operation before starting an integrity check.",
+            )
+            return
+        if not self._save_settings():
+            return
+        if not self.account_var.get().strip():
+            messagebox.showerror(
+                "Steam account missing",
+                "Enter the Steam account name used by SteamCMD before checking file integrity.",
+            )
+            return
+        try:
+            paths = DownloadPaths.from_steamcmd(Path(str(self.settings["steamcmd"])), self.data_dir)
+            selected = self.table.selection()
+            selected_id = selected[0] if selected else None
+            targets = discover_integrity_targets(
+                paths, self.history.list_jobs(limit=5000), selected_id=selected_id,
+            )
+        except (IntegrityCheckError, OSError, ValueError, RuntimeError) as exc:
+            messagebox.showwarning("Integrity check unavailable", str(exc))
+            self.status_var.set(f"Integrity check not started: {exc}")
+            return
+
+        if selected_id:
+            scope = f"selected Workshop item {selected_id}"
+        else:
+            scope = f"all {len(targets)} installed Workshop item(s)"
+        approved = messagebox.askyesno(
+            "Check File Integrity",
+            f"Run SteamCMD's native validation for {scope}?\n\n"
+            "SteamCMD will compare the installed Workshop files with its available source data. "
+            "It may download or repair changed/missing files and requires a working connection. "
+            "This is not a read-only scan. Existing partial-download cache files will not be deleted.\n\n"
+            "Continue?",
+        )
+        if not approved:
+            self.status_var.set("Integrity check cancelled; files were not touched.")
+            return
+
+        try:
+            timeout_seconds = int(self.timeout_var.get()) * 60
+        except ValueError as exc:
+            messagebox.showerror("Invalid timeout", str(exc))
+            return
+        policy = DownloadPolicy(
+            max_attempts=1,
+            attempt_timeout_seconds=timeout_seconds,
+            initial_backoff_seconds=0,
+            max_backoff_seconds=0,
+            max_stagnant_attempts=1,
+        )
+        self.stop_event.clear()
+        self.running = True
+        self.current_id = None
+        self.start_button.configure(state="disabled")
+        self.resume_selected_button.configure(state="disabled")
+        self.resume_old_button.configure(state="disabled")
+        self.integrity_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.progress_text_var.set(f"Integrity check queued · {len(targets)} item(s)")
+        self.status_var.set(
+            f"Checking integrity of {len(targets)} installed Workshop item(s) with SteamCMD…"
+        )
+        self.worker = threading.Thread(
+            target=self._run_integrity_check,
+            args=(targets, paths, policy),
+            daemon=True,
+            name="bo3wd-integrity-check",
+        )
+        self.worker.start()
+
+    def _run_integrity_check(
+        self,
+        targets: list[WorkshopItem],
+        paths: DownloadPaths,
+        policy: DownloadPolicy,
+    ) -> None:
+        started_at = time.time()
+        results: list[dict[str, object]] = []
+        try:
+            engine = DownloadEngine(
+                paths,
+                str(self.settings.get("steam_user", "")),
+                policy=policy,
+                validate=True,
+                history=self.history,
+                event_sink=self.events.put,
+            )
+            for index, item in enumerate(targets, start=1):
+                if self.stop_event.is_set():
+                    results.append({
+                        "workshop_id": item.workshop_id,
+                        "title": item.title,
+                        "status": "not_checked",
+                        "message": "Stopped before this item was checked.",
+                        "content_path": str(paths.content_root / item.workshop_id),
+                    })
+                    continue
+                self.current_id = item.workshop_id
+                self.events.put((
+                    "message",
+                    f"SteamCMD integrity validation · {index}/{len(targets)} · {item.workshop_id}",
+                ))
+                try:
+                    result = engine.download(item, self.stop_event)
+                    results.append({
+                        "workshop_id": result.workshop_id,
+                        "title": item.title,
+                        "status": result.status.value,
+                        "message": result.message,
+                        "attempt": result.attempt,
+                        "log_path": result.log_path,
+                        "content_path": str(paths.content_root / item.workshop_id),
+                    })
+                    if result.status == JobStatus.CANCELLED:
+                        # Mark remaining targets so the report distinguishes skipped items.
+                        continue
+                except Exception as exc:
+                    results.append({
+                        "workshop_id": item.workshop_id,
+                        "title": item.title,
+                        "status": "failed",
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "content_path": str(paths.content_root / item.workshop_id),
+                    })
+        except Exception as exc:
+            results.append({
+                "workshop_id": "",
+                "status": "failed",
+                "message": f"Integrity worker error: {type(exc).__name__}: {exc}",
+            })
+
+        report_path = ""
+        report_error = ""
+        try:
+            report_path = str(write_integrity_report(
+                self.data_dir,
+                started_at=started_at,
+                finished_at=time.time(),
+                results=results,
+            ))
+        except Exception as exc:
+            report_error = f"Could not save the integrity report: {type(exc).__name__}: {exc}"
+        self.events.put((
+            "integrity_done",
+            {
+                "results": results,
+                "report_path": report_path,
+                "report_error": report_error,
+                "stopped": self.stop_event.is_set(),
+            },
+        ))
+
     def _start_queue(self) -> None:
         if self.running or self.update_in_progress:
             return
@@ -743,6 +906,7 @@ class DownloaderApp(tk.Tk):
         self.start_button.configure(state="disabled")
         self.resume_selected_button.configure(state="disabled")
         self.resume_old_button.configure(state="disabled")
+        self.integrity_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.status_var.set(
             f"Queue running · {len(pending)} item(s) pending · partial downloads are preserved"
@@ -1042,14 +1206,53 @@ class DownloaderApp(tk.Tk):
                         "A versioned backup of the previous executable will be retained.",
                     )
                     self.destroy()
+                elif event[0] == "integrity_done":
+                    summary = event[1]
+                    self.running = False
+                    self.current_id = None
+                    self.start_button.configure(state="normal")
+                    self.resume_selected_button.configure(state="normal")
+                    self.resume_old_button.configure(state="normal")
+                    self.integrity_button.configure(state="normal")
+                    self.stop_button.configure(state="disabled")
+                    self._load_history()
+                    self._refresh_queue_summary()
+                    results = summary.get("results", [])
+                    verified = sum(str(item.get("status", "")).lower() == "completed" for item in results)
+                    failed = sum(str(item.get("status", "")).lower() == "failed" for item in results)
+                    cancelled = sum(str(item.get("status", "")).lower() == "cancelled" for item in results)
+                    not_checked = sum(
+                        str(item.get("status", "")).lower() not in {"completed", "failed", "cancelled"}
+                        for item in results
+                    )
+                    report_path = str(summary.get("report_path") or "")
+                    report_error = str(summary.get("report_error") or "")
+                    report_line = f"\n\nReport: {report_path}" if report_path else ""
+                    error_line = f"\n\n{report_error}" if report_error else ""
+                    detail = (
+                        f"SteamCMD integrity validation finished.\n\n"
+                        f"Verified/repaired: {verified}\nFailed: {failed}\n"
+                        f"Cancelled: {cancelled}\nNot checked: {not_checked}"
+                        f"{report_line}{error_line}"
+                    )
+                    self.status_var.set(
+                        f"Integrity check finished · verified {verified} · failed {failed} · "
+                        f"cancelled {cancelled} · not checked {not_checked}"
+                    )
+                    if failed or cancelled or not_checked or report_error:
+                        messagebox.showwarning("Integrity check results", detail)
+                    else:
+                        messagebox.showinfo("Integrity check complete", detail)
                 elif event[0] == "queue_done":
                     self.running = False
                     self.current_id = None
                     self.start_button.configure(state="normal")
                     self.resume_selected_button.configure(state="normal")
                     self.resume_old_button.configure(state="normal")
+                    self.integrity_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self._load_history()
+                    self._refresh_queue_summary()
                     self.status_var.set(str(event[1]) + " · partial/downloaded data was not cleaned up")
         except queue.Empty:
             pass
