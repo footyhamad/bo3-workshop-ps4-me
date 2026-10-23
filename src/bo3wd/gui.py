@@ -21,7 +21,7 @@ from .metadata import MetadataError, WorkshopMetadataClient
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
-from .updater import ReleaseInfo, UpdateError, check_for_update, download_verified_update, launch_self_update
+from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_self_update
 
 
 class DownloaderApp(tk.Tk):
