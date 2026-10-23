@@ -34,7 +34,7 @@ This project adds:
   - a GSC opcode table fix (`WaitTill` takes a count byte) and a PS4 stand-in for the PC-only
     `clearallcharactertables`;
   - lower memory use while checking big maps.
-- **The pipeline** ([bo3ps4.py](bo3ps4.py)): SteamCMD downloads (resuming its 5-minute timeouts), the console's
+- **The pipeline** ([bo3ps4.py](bo3ps4.py)): SteamCMD downloads (bounded retries across internal timeouts, retaining partial data), the console's
   language zones (an EU Spanish/Italian copy loads `es_`/`it_` zones and crashes without them), GoldHEN plugin
   loading, uploads, and a compatibility list.
 
@@ -90,6 +90,11 @@ py bo3ps4.py mark 798643901 ok                    # after playing it
 
 Then **close BO3 completely and start it again** (the mod scans for maps when it loads): Zombies > map select >
 **CUSTOM**.
+
+### Partial Workshop downloads
+
+SteamCMD can report an internal timeout while leaving useful chunks under `steamapps/workshop/downloads/311210/<id>`. `bo3ps4.py` streams each attempt into the per-map log, retries transient timeout/network errors with capped backoff, applies a 15-minute watchdog to a hung SteamCMD process, and stops after eight consecutive attempts with no new partial bytes.
+It never deletes partial SteamCMD data. Authentication prompts stop immediately with instructions to log in once manually. A download is accepted only when SteamCMD emits its success marker and the resulting Workshop folder contains a `.ff` fastfile. The full attempt history is kept in `workdir\\out\\<id>.log`.
 
 The first map takes longer (~20 minutes for a small one): the converter indexes your PS4 and PC game zones once
 and caches them in the workdir. After that a small map takes a few minutes, and LEVIATHAN ~25 minutes including

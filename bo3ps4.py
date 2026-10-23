@@ -37,6 +37,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
+from workshop_downloader import SteamWorkshopDownloader
 
 HERE = Path(__file__).resolve().parent
 APP_ID = "311210"
@@ -882,29 +883,18 @@ def _vdf_dump(node: dict, depth: int = 0) -> str:
 
 
 def download(item: str, log_path: Path) -> Path:
-    """Downloads (or re-validates) a Workshop item with SteamCMD's saved login; never prompts."""
-    cmd = [str(CFG.steamcmd), "+login", steam_user(), "+workshop_download_item", APP_ID, item, "validate", "+quit"]
-    partial = CFG.steamcmd.parent / "steamapps" / "workshop" / "downloads" / APP_ID / item
-    # SteamCMD abandons a Workshop download after ~5 minutes ("Timeout downloading item") even while data flows;
-    # running it again resumes, so big maps take several rounds.
-    for attempt in range(1, 31):
-        with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"\n$ steamcmd +login *** +workshop_download_item {APP_ID} {item} validate +quit  (try {attempt})\n")
-            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
-                                  timeout=6 * 3600)
-            log.write(proc.stdout + proc.stderr)
-        text = proc.stdout + proc.stderr
-        if "Cached credentials not found" in text or "password:" in text or "Invalid Password" in text:
-            raise RuntimeError(f"SteamCMD needs a login: run once by hand:  {CFG.steamcmd} +login <account> +quit")
-        if f"Success. Downloaded item {item}" in text:
-            return workshop_dir(item)
-        errors = re.findall(r"ERROR! ([^\r\n]*?)(?:Unloading|$)", text, re.M)
-        if not any("Timeout" in e for e in errors):
-            raise RuntimeError("SteamCMD download failed: " + ("; ".join(errors) or text.strip().splitlines()[-1]))
-        got = sum(p.stat().st_size for p in partial.rglob("*") if p.is_file()) if partial.is_dir() else 0
-        print(f"  SteamCMD timed out (try {attempt}), {got / 2**30:.1f} GB so far; resuming", flush=True)
-    raise RuntimeError("SteamCMD kept timing out (30 tries)")
-
+    """Download a Workshop item without discarding resumable SteamCMD data."""
+    if not re.fullmatch(r"\d{1,20}", str(item)):
+        raise RuntimeError(f"invalid Workshop item ID: {item!r}")
+    downloader = SteamWorkshopDownloader(
+        steamcmd=CFG.steamcmd,
+        username=steam_user(),
+        app_id=APP_ID,
+        content_root=CFG.workshop,
+        partial_root=CFG.steamcmd.parent / "steamapps" / "workshop" / "downloads" / APP_ID,
+        log_path=log_path,
+    )
+    return downloader.download(str(item))
 
 # ---------------------------------------------------------------- compatibility list
 

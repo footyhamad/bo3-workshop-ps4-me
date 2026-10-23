@@ -15,6 +15,15 @@
 - Existing patch code carries donor shader dependencies and supports nearest feature-dropping technique-set substitution when no PS4 shader compiler is available.
 - Existing converter output includes `FFPORTER_FIDELITY` JSON events; Python currently reduces these to stage-change messages instead of exposing a stable machine-readable stream.
 
+## Workshop download engine (overhaul branch)
+
+- The downloader is isolated in `workshop_downloader.py`; `bo3ps4.py` keeps its existing CLI and calls the module.
+- Each SteamCMD process has a watchdog; merged stdout/stderr is streamed into the existing per-map log.
+- Internal SteamCMD timeouts and explicit network failures are retried with capped exponential backoff. Login prompts and other non-transient errors fail immediately.
+- Partial-download directories are never removed by the retry engine. Consecutive attempts that add no bytes are bounded so a broken connection cannot loop forever.
+- A result is accepted only when the expected SteamCMD success marker is present and the content folder contains a fastfile.
+- CI uses synthetic SteamCMD processes and temporary folders; this validates orchestration and preservation behavior, not live Steam or PS4 hardware.
+
 ## Failure surfaces to instrument
 - SteamCMD authentication/timeouts and cache validity.
 - PS4 zone pull interruption/corruption.
