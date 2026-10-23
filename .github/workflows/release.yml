@@ -15,7 +15,7 @@ on:
         description: "Must match pyproject.toml and __version__, e.g. 2.0.4"
         required: true
         type: string
-        default: "2.0.5"
+        default: "2.0.6"
 
 permissions:
   contents: write
