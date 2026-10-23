@@ -166,7 +166,7 @@ class DownloadEngine:
             event = self._event(
                 item, status, attempt=attempt, message=message, log_path=log_path, started=started,
                 line=line, bytes_received=self._current_bytes(item_id) if bytes_received is None else bytes_received,
-                speed_bytes_per_second=current_speed, eta_seconds=current_eta,
+                speed_bytes_per_second=current_speed, eta_seconds=current_eta,  # noqa: B023
             )
             self._emit(item, event)
             return event
@@ -230,8 +230,8 @@ class DownloadEngine:
                 if self.event_sink is not None and now - last_ui_telemetry_at >= 0.75:
                     last_ui_telemetry_at = now
                     telemetry = self._event(
-                        item, JobStatus.DOWNLOADING, attempt=attempt, message="Transfer telemetry",
-                        log_path=log_path, started=started, bytes_received=last_line_byte_count,
+                        item, JobStatus.DOWNLOADING, attempt=attempt, message="Transfer telemetry",  # noqa: B023
+                        log_path=log_path, started=started, bytes_received=last_line_byte_count,  # noqa: B023
                         speed_bytes_per_second=current_speed, eta_seconds=current_eta,
                     )
                     try:
@@ -247,9 +247,9 @@ class DownloadEngine:
 
             def handle_line(line: str) -> None:
                 nonlocal marker_seen, auth_seen, permanent_seen, last_ui_line_at
-                recent_lines.append(line)
-                if len(recent_lines) > 80:
-                    del recent_lines[:20]
+                recent_lines.append(line)  # noqa: B023
+                if len(recent_lines) > 80:  # noqa: B023
+                    del recent_lines[:20]  # noqa: B023
                 if any(int(match) == int(item_id) for match in _SUCCESS.findall(line)):
                     marker_seen = True
                 if _AUTH.search(line):
@@ -261,7 +261,7 @@ class DownloadEngine:
                 if self.event_sink is not None and now - last_ui_line_at >= 0.15:
                     last_ui_line_at = now
                     event = self._event(
-                        item, JobStatus.DOWNLOADING, attempt=attempt, message=line[:500],
+                        item, JobStatus.DOWNLOADING, attempt=attempt, message=line[:500],  # noqa: B023
                         log_path=log_path, started=started, line=line,
                         bytes_received=last_line_byte_count,
                         speed_bytes_per_second=current_speed, eta_seconds=current_eta,
