@@ -157,7 +157,7 @@ def test_queue_summary_counts_queued_active_completed_and_attention():
             return tuple(rows)
 
         def item(self, item_id, _kind):
-            return {"values": rows[item_id]}
+            return rows[item_id]
 
     class FakeVariable:
         def __init__(self):
