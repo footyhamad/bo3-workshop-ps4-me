@@ -62,7 +62,16 @@ class ProcessRunner:
             "env": env,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # SteamCMD is a console executable. Without CREATE_NO_WINDOW it opens a
+            # separate black console when started from the windowed GUI. stdout and
+            # stderr remain piped, so live output still reaches the in-app log/progress.
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            kwargs["startupinfo"] = startupinfo
         try:
             proc = subprocess.Popen(list(command), **kwargs)
         except OSError as exc:
