@@ -9,6 +9,7 @@ import sys
 import time
 import traceback
 import threading
+import webbrowser
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -20,6 +21,7 @@ from .metadata import MetadataError, WorkshopMetadataClient
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
+from .updater import ReleaseInfo, UpdateError, check_for_update, download_verified_update, launch_self_update
 
 
 class DownloaderApp(tk.Tk):
@@ -40,7 +42,7 @@ class DownloaderApp(tk.Tk):
             self.settings = dict(SettingsStore.DEFAULTS)
         self.history = JobHistory(self.data_dir / "history.sqlite3")
         self.recovered_jobs = self.history.recover_interrupted()
-        self.events: queue.Queue[DownloadEvent | tuple[str, str]] = queue.Queue()
+        self.events: queue.Queue[DownloadEvent | tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.running = False
@@ -181,11 +183,97 @@ class DownloaderApp(tk.Tk):
         self._button(controls, "Retry selected", self._retry_selected).pack(side="left", padx=7)
         self._button(controls, "Remove selected", self._remove_selected).pack(side="left", padx=7)
         self._button(controls, "Clear finished", self._clear_finished).pack(side="left", padx=7)
+        self.update_button = self._button(controls, "Check / Update", self._check_for_updates)
+        self.update_button.pack(side="right", padx=(7, 0))
         self._button(controls, "Open item folder", self._open_item_folder).pack(side="right", padx=(7, 0))
         self._button(controls, "Open logs", self._open_logs).pack(side="right")
         tk.Label(outer, textvariable=self.status_var, bg="#111318", fg="#9ca8b9", anchor="w", font=("Segoe UI", 9)).pack(fill="x", pady=(2, 0))
         self.log_view = tk.Text(outer, height=5, bg="#0c0e12", fg="#b8c6d9", insertbackground="#ffffff", relief="flat", font=("Consolas", 9), wrap="word", state="disabled")
         self.log_view.pack(fill="x", pady=(8, 0))
+
+    def _check_for_updates(self) -> None:
+        """Check the stable GitHub Releases channel without blocking the Tk event loop."""
+        if self.running:
+            messagebox.showwarning(
+                "Download in progress",
+                "Stop or finish the active Workshop queue before updating the application.",
+            )
+            return
+        self.update_button.configure(state="disabled")
+        self.status_var.set(f"Checking stable releases for updates (installed v{__version__})…")
+        threading.Thread(
+            target=self._check_for_updates_worker,
+            daemon=True,
+            name="bo3wd-update-check",
+        ).start()
+
+    def _check_for_updates_worker(self) -> None:
+        try:
+            release = check_for_update(__version__)
+        except Exception as exc:
+            self.events.put(("update_check_failed", str(exc)))
+        else:
+            self.events.put(("update_check_complete", release))
+
+    def _handle_update_check_complete(self, release: ReleaseInfo) -> None:
+        self.update_button.configure(state="normal")
+        if not release.update_available:
+            if release.latest_version == __version__:
+                self.status_var.set(f"Application is up to date · v{__version__}")
+                messagebox.showinfo(
+                    "No update available",
+                    f"You're running the latest stable release, v{__version__}.",
+                )
+            else:
+                self.status_var.set(
+                    f"Installed v{__version__} is newer than latest stable release v{release.latest_version}"
+                )
+                messagebox.showwarning(
+                    "Version check",
+                    f"The installed version (v{__version__}) is newer than the latest stable release "
+                    f"(v{release.latest_version}). No downgrade was performed.",
+                )
+            return
+
+        if not getattr(sys, "frozen", False):
+            self.status_var.set(f"Update v{release.latest_version} is available · source install")
+            if messagebox.askyesno(
+                "Update available",
+                f"Version {release.latest_version} is newer than v{__version__}. "
+                "This copy is running from source, so it cannot replace itself safely. "
+                "Open the stable release page?",
+            ):
+                webbrowser.open(release.release_url)
+            return
+
+        if not messagebox.askyesno(
+            "Update available",
+            f"Installed version: v{__version__}\nLatest stable version: v{release.latest_version}\n\n"
+            "Download the official release, verify its SHA-256 checksum, replace this executable, "
+            "and restart the application?",
+        ):
+            self.status_var.set("Update cancelled · current version unchanged")
+            return
+        self.update_button.configure(state="disabled")
+        self.status_var.set(f"Downloading and verifying v{release.latest_version}…")
+        threading.Thread(
+            target=self._download_and_apply_update_worker,
+            args=(release,),
+            daemon=True,
+            name="bo3wd-update-download",
+        ).start()
+
+    def _download_and_apply_update_worker(self, release: ReleaseInfo) -> None:
+        try:
+            target = Path(sys.executable).resolve()
+            staged = download_verified_update(
+                release, target.parent, target_name=target.name
+            )
+            launch_self_update(staged, target, __version__)
+        except Exception as exc:
+            self.events.put(("update_failed", str(exc)))
+        else:
+            self.events.put(("update_ready", release.latest_version))
 
     def _browse_steamcmd(self) -> None:
         chosen = filedialog.askopenfilename(title="Select SteamCMD", filetypes=[("SteamCMD", "steamcmd.exe"), ("Executables", "*.exe"), ("All files", "*.*")])
@@ -602,7 +690,32 @@ class DownloaderApp(tk.Tk):
                     if row:
                         self._upsert_row(row)
                 elif event[0] == "message":
-                    self.status_var.set(event[1])
+                    self.status_var.set(str(event[1]))
+                elif event[0] == "update_check_complete":
+                    self._handle_update_check_complete(event[1])  # type: ignore[arg-type]
+                elif event[0] == "update_check_failed":
+                    self.update_button.configure(state="normal")
+                    self.status_var.set("Could not check for updates")
+                    messagebox.showerror(
+                        "Update check failed",
+                        f"Could not check GitHub Releases. Your installed version was not changed.\n\n{event[1]}",
+                    )
+                elif event[0] == "update_failed":
+                    self.update_button.configure(state="normal")
+                    self.status_var.set("Update failed · installed version unchanged")
+                    messagebox.showerror(
+                        "Update failed",
+                        f"The update was not applied. Your installed version remains v{__version__}.\n\n{event[1]}",
+                    )
+                elif event[0] == "update_ready":
+                    self.status_var.set(f"Applying v{event[1]} · the application will restart")
+                    messagebox.showinfo(
+                        "Update verified",
+                        f"Version {event[1]} downloaded and SHA-256 verified. "
+                        "The app will close, replace its executable, and reopen. "
+                        "A versioned backup of the previous executable will be retained.",
+                    )
+                    self.destroy()
                 elif event[0] == "queue_done":
                     self.running = False
                     self.current_id = None
