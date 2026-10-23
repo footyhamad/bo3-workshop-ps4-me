@@ -46,6 +46,7 @@ class DownloaderApp(tk.Tk):
         self.worker: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.running = False
+        self.update_in_progress = False
         self.current_id: str | None = None
         self.last_log_path = ""
 
@@ -254,6 +255,7 @@ class DownloaderApp(tk.Tk):
         ):
             self.status_var.set("Update cancelled · current version unchanged")
             return
+        self.update_in_progress = True
         self.update_button.configure(state="disabled")
         self.status_var.set(f"Downloading and verifying v{release.latest_version}…")
         threading.Thread(
@@ -500,7 +502,7 @@ class DownloaderApp(tk.Tk):
             self._append_log(f"[{item_id}] {row.message}")
 
     def _start_queue(self) -> None:
-        if self.running:
+        if self.running or self.update_in_progress:
             return
         try:
             if not self._save_settings():
@@ -701,6 +703,7 @@ class DownloaderApp(tk.Tk):
                         f"Could not check GitHub Releases. Your installed version was not changed.\n\n{event[1]}",
                     )
                 elif event[0] == "update_failed":
+                    self.update_in_progress = False
                     self.update_button.configure(state="normal")
                     self.status_var.set("Update failed · installed version unchanged")
                     messagebox.showerror(
@@ -708,6 +711,7 @@ class DownloaderApp(tk.Tk):
                         f"The update was not applied. Your installed version remains v{__version__}.\n\n{event[1]}",
                     )
                 elif event[0] == "update_ready":
+                    self.update_in_progress = False
                     self.status_var.set(f"Applying v{event[1]} · the application will restart")
                     messagebox.showinfo(
                         "Update verified",
@@ -727,6 +731,13 @@ class DownloaderApp(tk.Tk):
         self.after(120, self._poll_events)
 
     def _close(self) -> None:
+        if self.update_in_progress:
+            messagebox.showinfo(
+                "Update in progress",
+                "The update is being downloaded and verified. Let this operation finish; "
+                "the app will offer to restart after verification.",
+            )
+            return
         if self.running:
             if not messagebox.askyesno("Stop downloader?", "Stop the active attempt? Partial data will be preserved."):
                 return
