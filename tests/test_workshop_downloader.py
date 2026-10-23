@@ -88,7 +88,7 @@ def test_success_requires_marker_and_fastfile(tmp_path):
 
 
 def test_success_marker_survives_long_steamcmd_output(tmp_path):
-    output = "Success. Downloaded item 123\\n" + "".join(f"debug line {n}\\n" for n in range(40))
+    output = "Success. Downloaded item 123\n" + "".join(f"debug line {n}\n" for n in range(40))
     d, calls, _, _, content, _, _ = make_downloader(
         tmp_path, [{"output": output, "map_file": True}]
     )
