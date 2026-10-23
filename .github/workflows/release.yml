@@ -67,8 +67,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$env:RELEASE_TAG" *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $existingTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not query GitHub Releases; refusing to publish without checking for a duplicate version."
+          }
+          if ($existingTags -contains "$env:RELEASE_TAG") {
             "SKIP_RELEASE=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "Stable release $env:RELEASE_TAG already exists; version will not be overwritten."
           } else {
