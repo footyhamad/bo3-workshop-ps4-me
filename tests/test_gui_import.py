@@ -135,3 +135,47 @@ def test_download_progress_shows_received_bytes_when_total_size_is_unknown():
     assert bar.started is True
     assert "2.5 MB downloaded" in label.value
     assert "250.0 KB/s" in label.value
+
+
+def test_queue_summary_counts_queued_active_completed_and_attention():
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    from bo3wd.gui import DownloaderApp
+
+    rows = {
+        "101": ("101", "Queued item", "Queued"),
+        "102": ("102", "Working item", "Downloading"),
+        "103": ("103", "Retrying item", "Retry Wait"),
+        "104": ("104", "Finished item", "Completed"),
+        "105": ("105", "Failed item", "Failed"),
+        "106": ("106", "Stopped item", "Cancelled"),
+    }
+
+    class FakeTable:
+        def get_children(self, _parent=""):
+            return tuple(rows)
+
+        def item(self, item_id, _kind):
+            return {"values": rows[item_id]}
+
+    class FakeVariable:
+        def __init__(self):
+            self.value = "0"
+
+        def set(self, value):
+            self.value = value
+
+    app = SimpleNamespace(
+        table=FakeTable(),
+        summary_vars={key: FakeVariable() for key in ("queued", "active", "completed", "attention")},
+    )
+
+    DownloaderApp._refresh_queue_summary(app)
+
+    assert {key: variable.value for key, variable in app.summary_vars.items()} == {
+        "queued": "1",
+        "active": "2",
+        "completed": "1",
+        "attention": "2",
+    }
