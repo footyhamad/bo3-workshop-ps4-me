@@ -64,7 +64,7 @@ class DownloaderApp(tk.Tk):
         self.max_attempts_var = tk.StringVar(value=str(self.settings.get("max_attempts", 30)))
         self.timeout_var = tk.StringVar(value=str(self.settings.get("attempt_timeout_minutes", 15)))
         self.status_var = tk.StringVar(value="Ready · partial downloads are preserved")
-        self.progress_text_var = tk.StringVar(value="No active transfer")
+        self.progress_text_var = tk.StringVar(value="Ready · downloaded bytes and integrity-check progress appear here")
         self.progress_is_indeterminate = False
         self.item_entry_var = tk.StringVar()
         self.summary_vars = {
@@ -261,6 +261,23 @@ class DownloaderApp(tk.Tk):
             fg="#929baa",
         ).grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 7))
 
+        transfer = tk.Frame(
+            outer, bg="#191f2a", highlightthickness=1, highlightbackground="#2a3342",
+        )
+        transfer.pack(fill="x", pady=(10, 8))
+        tk.Label(
+            transfer, text="LIVE DOWNLOAD DATA / INTEGRITY STATUS", bg="#191f2a", fg="#8795aa",
+            font=("Segoe UI", 10, "bold"), anchor="w",
+        ).pack(fill="x", padx=12, pady=(10, 0))
+        tk.Label(
+            transfer, textvariable=self.progress_text_var, bg="#191f2a", fg="#edf3fb",
+            anchor="w", font=("Segoe UI", 9, "bold"),
+        ).pack(fill="x", padx=12, pady=(3, 4))
+        self.download_progress = ttk.Progressbar(
+            transfer, orient="horizontal", mode="determinate", maximum=100,
+        )
+        self.download_progress.pack(fill="x", padx=12, pady=(0, 12))
+
         table_frame = tk.Frame(outer, bg="#111318")
         table_frame.pack(fill="both", expand=True)
         table_frame.rowconfigure(0, weight=1)
@@ -291,23 +308,6 @@ class DownloaderApp(tk.Tk):
         self.table.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
-
-        transfer = tk.Frame(
-            outer, bg="#191f2a", highlightthickness=1, highlightbackground="#2a3342",
-        )
-        transfer.pack(fill="x", pady=(10, 0))
-        tk.Label(
-            transfer, text="CURRENT TRANSFER", bg="#191f2a", fg="#8795aa",
-            font=("Segoe UI", 8, "bold"), anchor="w",
-        ).pack(fill="x", padx=12, pady=(9, 0))
-        tk.Label(
-            transfer, textvariable=self.progress_text_var, bg="#191f2a", fg="#edf3fb",
-            anchor="w", font=("Segoe UI", 9, "bold"),
-        ).pack(fill="x", padx=12, pady=(3, 4))
-        self.download_progress = ttk.Progressbar(
-            transfer, orient="horizontal", mode="determinate", maximum=100,
-        )
-        self.download_progress.pack(fill="x", padx=12, pady=(0, 10))
 
         controls = tk.LabelFrame(
             outer, text="  QUEUE CONTROLS  ", bg="#111318", fg="#8fa4bd",
