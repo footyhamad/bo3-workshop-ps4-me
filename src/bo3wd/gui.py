@@ -89,9 +89,32 @@ class DownloaderApp(tk.Tk):
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Treeview", background="#1b1e26", foreground="#e7e9ef", fieldbackground="#1b1e26", rowheight=27, borderwidth=0)
-        style.configure("Treeview.Heading", background="#252a35", foreground="#e7e9ef", relief="flat", font=("Segoe UI", 9, "bold"))
-        style.map("Treeview", background=[("selected", "#294a73")], foreground=[("selected", "#ffffff")])
+        style.configure(
+            "Treeview", background="#151a23", foreground="#e7e9ef",
+            fieldbackground="#151a23", rowheight=31, borderwidth=0,
+            font=("Segoe UI", 9), padding=(5, 3),
+        )
+        style.configure(
+            "Treeview.Heading", background="#252d3b", foreground="#eef3fb",
+            relief="flat", font=("Segoe UI", 9, "bold"), padding=(8, 8),
+        )
+        style.map(
+            "Treeview", background=[("selected", "#254a75")],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "Horizontal.TProgressbar", troughcolor="#283140",
+            background="#4e9ef7", bordercolor="#283140", lightcolor="#4e9ef7",
+            darkcolor="#4e9ef7", thickness=12,
+        )
+        style.configure(
+            "Vertical.TScrollbar", background="#252d3b", troughcolor="#111318",
+            bordercolor="#111318", arrowcolor="#b8c6d9",
+        )
+        style.configure(
+            "Horizontal.TScrollbar", background="#252d3b", troughcolor="#111318",
+            bordercolor="#111318", arrowcolor="#b8c6d9",
+        )
         style.configure("TCombobox", fieldbackground="#252a35", background="#252a35", foreground="#e7e9ef")
 
     def _label(self, parent: tk.Widget, text: str, **kwargs: object) -> tk.Label:
@@ -220,6 +243,8 @@ class DownloaderApp(tk.Tk):
         self._entry(add, self.item_entry_var).grid(
             row=0, column=0, sticky="ew", padx=(12, 7), pady=8, ipady=5
         )
+        self.item_entry = add.winfo_children()[0]
+        self.item_entry.bind("<Return>", lambda _event: self._add_items(start_after=True))
         self._button(add, "Add to Queue", self._add_items).grid(
             row=0, column=1, padx=5, pady=7
         )
@@ -258,6 +283,7 @@ class DownloaderApp(tk.Tk):
         self.table.tag_configure("completed", foreground="#83dfaa")
         self.table.tag_configure("failed", foreground="#ff9292")
         self.table.tag_configure("cancelled", foreground="#d1b5ff")
+        self.table.bind("<Double-1>", lambda _event: self._resume_selected())
         vertical = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
         self.table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
