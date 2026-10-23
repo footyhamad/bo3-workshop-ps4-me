@@ -789,6 +789,7 @@ class DownloaderApp(tk.Tk):
             return
         self.history.delete(item_id)
         self.table.delete(item_id)
+        self._refresh_queue_summary()
         self.status_var.set(f"Removed {item_id} from the queue/history. Download files were not deleted.")
 
     def _resume_selected(self) -> None:
@@ -850,6 +851,7 @@ class DownloaderApp(tk.Tk):
             row = self.history.get(item_id)
             if row is None:
                 self.table.delete(item_id)
+        self._refresh_queue_summary()
         self.status_var.set(f"Cleared {count} finished history record(s). Downloaded/partial files were not deleted.")
 
     def _open_logs(self) -> None:
