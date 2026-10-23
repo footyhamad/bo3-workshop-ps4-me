@@ -741,8 +741,12 @@ class DownloaderApp(tk.Tk):
         self.stop_event.clear()
         self.running = True
         self.start_button.configure(state="disabled")
+        self.resume_selected_button.configure(state="disabled")
+        self.resume_old_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.status_var.set(f"Queue running · {len(pending)} item(s) pending · retries preserve partial files")
+        self.status_var.set(
+            f"Queue running · {len(pending)} item(s) pending · partial downloads are preserved"
+        )
         self.worker = threading.Thread(target=self._run_queue, args=(pending, policy), daemon=True, name="bo3wd-queue")
         self.worker.start()
 
@@ -1042,6 +1046,8 @@ class DownloaderApp(tk.Tk):
                     self.running = False
                     self.current_id = None
                     self.start_button.configure(state="normal")
+                    self.resume_selected_button.configure(state="normal")
+                    self.resume_old_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self._load_history()
                     self.status_var.set(str(event[1]) + " · partial/downloaded data was not cleaned up")
