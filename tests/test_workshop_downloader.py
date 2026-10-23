@@ -86,6 +86,16 @@ def test_success_requires_marker_and_fastfile(tmp_path):
     assert any("Download verified" in line for line in emitted)
 
 
+
+def test_success_marker_survives_long_steamcmd_output(tmp_path):
+    output = "Success. Downloaded item 123\\n" + "".join(f"debug line {n}\\n" for n in range(40))
+    d, calls, _, _, content, _, _ = make_downloader(
+        tmp_path, [{"output": output, "map_file": True}]
+    )
+    assert d.download("123") == content / "123"
+    assert len(calls) == 1
+
+
 def test_success_marker_without_fastfile_is_rejected(tmp_path):
     d, calls, _, _, _, _, _ = make_downloader(
         tmp_path, [{"output": "Success. Downloaded item 123\n"}]
@@ -168,7 +178,7 @@ def test_stagnant_timeout_stops_and_keeps_partial_bytes(tmp_path):
     )
     with pytest.raises(DownloadError, match="failed to increase partial data"):
         d.download("123")
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert (partial / "123" / "chunk.tmp").read_bytes() == b"x" * 512
 
 

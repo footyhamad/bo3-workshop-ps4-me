@@ -51,6 +51,7 @@ class AttemptResult:
     output_tail: str
     timed_out: bool
     auth_required: bool
+    success_item_ids: tuple[str, ...]
 
 
 _AUTH_PROMPT = re.compile(
@@ -135,6 +136,7 @@ class SteamWorkshopDownloader:
         timed_out = False
         auth_required = False
         output_lines: deque[str] = deque(maxlen=self.policy.log_tail_lines)
+        success_item_ids: set[str] = set()
         events: queue.Queue[tuple[str, str | None]] = queue.Queue()
 
         with self.log_path.open("a", encoding="utf-8", errors="replace", newline="\n") as log:
@@ -193,6 +195,7 @@ class SteamWorkshopDownloader:
                 if kind == "line" and payload is not None:
                     line = payload.replace(self.username, "<saved-account>") if self.username else payload
                     output_lines.append(line.rstrip("\r\n"))
+                    success_item_ids.update(_SUCCESS.findall(line))
                     log.write(line)
                     log.flush()
                     if _AUTH_PROMPT.search(line):
@@ -232,7 +235,10 @@ class SteamWorkshopDownloader:
             )
             log.flush()
 
-        return AttemptResult(returncode, "\n".join(output_lines), timed_out, auth_required)
+        return AttemptResult(
+            returncode, "\n".join(output_lines), timed_out, auth_required,
+            tuple(sorted(success_item_ids)),
+        )
 
     @staticmethod
     def _failure_detail(output: str, returncode: int, item_id: str) -> str:
@@ -276,7 +282,7 @@ class SteamWorkshopDownloader:
                     f"the partial download remains at {partial}."
                 )
 
-            success = any(int(found) == int(item_id) for found in _SUCCESS.findall(result.output_tail))
+            success = item_id in result.success_item_ids
             if success:
                 if not self._has_fastfile(content):
                     raise DownloadError(
