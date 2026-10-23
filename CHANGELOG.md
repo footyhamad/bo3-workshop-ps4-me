@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.6 — visible integrity and live data progress
+
+- Moved the live downloaded-data and integrity-status panel above the queue table so it stays visible in shorter windows.
+- Increased filesystem progress sampling frequency so the data amount updates during quiet SteamCMD transfers, even when SteamCMD prints no progress lines.
+- Added a regression test ensuring periodic telemetry reports partial-file bytes before SteamCMD finishes.
+- Keeps SteamCMD's native validation for integrity checks, with per-item statuses and a timestamped JSON report; partial caches are preserved.
+
+
 ## 2.0.5 — SteamCMD Workshop integrity checking
 
 - Added a Check File Integrity action for the selected installed Workshop item or all installed content folders.
