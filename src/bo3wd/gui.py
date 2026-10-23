@@ -28,8 +28,8 @@ class DownloaderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{APP_NAME}  v{__version__}")
-        self.geometry("1120x750")
-        self.minsize(920, 620)
+        self.geometry("1240x840")
+        self.minsize(960, 700)
         self.configure(bg="#111318")
 
         self.data_dir = default_data_dir()
@@ -63,9 +63,15 @@ class DownloaderApp(tk.Tk):
         self.max_attempts_var = tk.StringVar(value=str(self.settings.get("max_attempts", 30)))
         self.timeout_var = tk.StringVar(value=str(self.settings.get("attempt_timeout_minutes", 15)))
         self.status_var = tk.StringVar(value="Ready · partial downloads are preserved")
-        self.progress_text_var = tk.StringVar(value="No active download")
+        self.progress_text_var = tk.StringVar(value="No active transfer")
         self.progress_is_indeterminate = False
         self.item_entry_var = tk.StringVar()
+        self.summary_vars = {
+            "queued": tk.StringVar(value="0"),
+            "active": tk.StringVar(value="0"),
+            "completed": tk.StringVar(value="0"),
+            "attention": tk.StringVar(value="0"),
+        }
 
         self._setup_style()
         self._build_ui()
@@ -115,83 +121,222 @@ class DownloaderApp(tk.Tk):
 
     def _build_ui(self) -> None:
         outer = tk.Frame(self, bg="#111318")
-        outer.pack(fill="both", expand=True, padx=18, pady=16)
+        outer.pack(fill="both", expand=True, padx=18, pady=14)
 
+        # Header: the update action stays visible even when the queue toolbar is narrow.
         header = tk.Frame(outer, bg="#111318")
         header.pack(fill="x", pady=(0, 12))
-        tk.Label(header, text="BO3 WORKSHOP", font=("Segoe UI", 19, "bold"), bg="#111318", fg="#f4f6fa").pack(anchor="w")
-        tk.Label(header, text="Resumable SteamCMD downloads · AppID 311210", font=("Segoe UI", 10), bg="#111318", fg="#929baa").pack(anchor="w", pady=(0, 7))
-        self._label(header, "", anchor="w").pack(fill="x")
+        self.update_button = self._button(
+            header, "Check for Updates", self._check_for_updates, accent=True
+        )
+        self.update_button.pack(side="right", anchor="ne", padx=(12, 0), pady=4)
+        title_area = tk.Frame(header, bg="#111318")
+        title_area.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            title_area,
+            text="BO3 WORKSHOP DOWNLOADER",
+            font=("Segoe UI", 20, "bold"),
+            bg="#111318",
+            fg="#f4f6fa",
+        ).pack(anchor="w")
+        tk.Label(
+            title_area,
+            text=f"Steam Workshop queue  ·  AppID 311210  ·  v{__version__}",
+            font=("Segoe UI", 10),
+            bg="#111318",
+            fg="#91a0b5",
+        ).pack(anchor="w", pady=(2, 0))
 
-        settings = tk.LabelFrame(outer, text="  Setup  ", bg="#111318", fg="#8fa4bd", bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw")
-        settings.pack(fill="x", pady=(0, 12), ipady=7)
+        # Live queue summary gives the user a clear signal that jobs were loaded.
+        summary = tk.Frame(outer, bg="#111318")
+        summary.pack(fill="x", pady=(0, 12))
+        summary_cards = (
+            ("QUEUED", "queued", "#75b9ff"),
+            ("ACTIVE", "active", "#f2c46d"),
+            ("COMPLETED", "completed", "#72d7a0"),
+            ("NEEDS ATTENTION", "attention", "#ff8c8c"),
+        )
+        for column, (caption, key, tint) in enumerate(summary_cards):
+            summary.columnconfigure(column, weight=1, uniform="summary")
+            card = tk.Frame(
+                summary, bg="#1a202b", highlightthickness=1,
+                highlightbackground="#2a3342", bd=0,
+            )
+            card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0 if column == 3 else 6))
+            tk.Label(
+                card, text=caption, bg="#1a202b", fg="#8795aa",
+                font=("Segoe UI", 8, "bold"), anchor="w",
+            ).pack(fill="x", padx=12, pady=(8, 0))
+            tk.Label(
+                card, textvariable=self.summary_vars[key], bg="#1a202b", fg=tint,
+                font=("Segoe UI", 19, "bold"), anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 8))
+
+        settings = tk.LabelFrame(
+            outer, text="  STEAMCMD SETUP  ", bg="#111318", fg="#8fa4bd",
+            bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
+        )
+        settings.pack(fill="x", pady=(0, 10), ipady=4)
         settings.columnconfigure(1, weight=1)
-        self._label(settings, "SteamCMD executable").grid(row=0, column=0, sticky="w", padx=(12, 8), pady=5)
-        self._entry(settings, self.steamcmd_var).grid(row=0, column=1, sticky="ew", pady=5)
-        self._button(settings, "Browse…", self._browse_steamcmd).grid(row=0, column=2, padx=8, pady=5)
-        self._label(settings, "Steam account name").grid(row=1, column=0, sticky="w", padx=(12, 8), pady=5)
-        self._entry(settings, self.account_var).grid(row=1, column=1, sticky="ew", pady=5)
-        tk.Checkbutton(settings, text="Validate files", variable=self.validate_var, bg="#111318", fg="#d9dee8", selectcolor="#20242d", activebackground="#111318", activeforeground="#ffffff").grid(row=1, column=2, sticky="w", padx=8)
+        self._label(settings, "SteamCMD executable").grid(
+            row=0, column=0, sticky="w", padx=(12, 8), pady=5
+        )
+        self._entry(settings, self.steamcmd_var).grid(
+            row=0, column=1, sticky="ew", pady=5
+        )
+        self._button(settings, "Browse…", self._browse_steamcmd).grid(
+            row=0, column=2, padx=8, pady=5
+        )
+        self._label(settings, "Steam account name").grid(
+            row=1, column=0, sticky="w", padx=(12, 8), pady=5
+        )
+        self._entry(settings, self.account_var).grid(
+            row=1, column=1, sticky="ew", pady=5
+        )
+        tk.Checkbutton(
+            settings, text="Validate files", variable=self.validate_var,
+            bg="#111318", fg="#d9dee8", selectcolor="#20242d",
+            activebackground="#111318", activeforeground="#ffffff",
+        ).grid(row=1, column=2, sticky="w", padx=8)
         row2 = tk.Frame(settings, bg="#111318")
-        row2.grid(row=2, column=1, columnspan=2, sticky="w", pady=(4, 0))
-        self._label(settings, "Retry budget").grid(row=2, column=0, sticky="w", padx=(12, 8), pady=5)
+        row2.grid(row=2, column=1, columnspan=2, sticky="w", pady=(3, 0))
+        self._label(settings, "Retry budget").grid(
+            row=2, column=0, sticky="w", padx=(12, 8), pady=5
+        )
         self._entry(row2, self.max_attempts_var, width=6).pack(side="left")
         self._label(row2, "attempts · process timeout").pack(side="left", padx=(8, 6))
         self._entry(row2, self.timeout_var, width=5).pack(side="left")
-        self._label(row2, "minutes · saved log/history").pack(side="left", padx=8)
-        self._button(settings, "Save settings", self._save_settings).grid(row=2, column=3, sticky="e", padx=(8, 12), pady=5)
+        self._label(row2, "minutes").pack(side="left", padx=8)
+        self._button(settings, "Save Settings", self._save_settings).grid(
+            row=2, column=3, sticky="e", padx=(8, 12), pady=5
+        )
 
-        add = tk.LabelFrame(outer, text="  Add Workshop items  ", bg="#111318", fg="#8fa4bd", bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw")
-        add.pack(fill="x", pady=(0, 12), ipady=7)
+        add = tk.LabelFrame(
+            outer, text="  ADD WORKSHOP DOWNLOADS  ", bg="#111318", fg="#8fa4bd",
+            bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
+        )
+        add.pack(fill="x", pady=(0, 10), ipady=3)
         add.columnconfigure(0, weight=1)
-        self._entry(add, self.item_entry_var).grid(row=0, column=0, sticky="ew", padx=(12, 7), pady=7, ipady=5)
-        self._button(add, "Add IDs / URLs", self._add_items, accent=True).grid(row=0, column=1, padx=5, pady=7)
-        self._button(add, "Import list…", self._import_list).grid(row=0, column=2, padx=(5, 12), pady=7)
-        self._label(add, "Paste IDs or Steam Workshop URLs. One per line works best; duplicates are ignored.", fg="#929baa").grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        self._entry(add, self.item_entry_var).grid(
+            row=0, column=0, sticky="ew", padx=(12, 7), pady=8, ipady=5
+        )
+        self._button(add, "Add to Queue", self._add_items).grid(
+            row=0, column=1, padx=5, pady=7
+        )
+        self._button(add, "Add + Start", lambda: self._add_items(start_after=True), accent=True).grid(
+            row=0, column=2, padx=5, pady=7
+        )
+        self._button(add, "Import List…", self._import_list).grid(
+            row=0, column=3, padx=(5, 12), pady=7
+        )
+        self._label(
+            add,
+            "Paste a Workshop ID or URL. Multiple entries can be separated by new lines.",
+            fg="#929baa",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 7))
 
         table_frame = tk.Frame(outer, bg="#111318")
         table_frame.pack(fill="both", expand=True)
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
         columns = ("id", "title", "status", "attempt", "progress", "received")
-        self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-        labels = {"id": "Workshop ID", "title": "Title", "status": "Status", "attempt": "Attempt", "progress": "Progress", "received": "Downloaded data"}
-        widths = {"id": 125, "title": 280, "status": 110, "attempt": 75, "progress": 100, "received": 190}
+        self.table = ttk.Treeview(
+            table_frame, columns=columns, show="headings", selectmode="browse",
+        )
+        labels = {
+            "id": "WORKSHOP ID", "title": "WORKSHOP ITEM", "status": "STATUS",
+            "attempt": "ATTEMPT", "progress": "PROGRESS", "received": "DOWNLOADED DATA",
+        }
+        widths = {"id": 125, "title": 280, "status": 115, "attempt": 75, "progress": 100, "received": 190}
         for col in columns:
             self.table.heading(col, text=labels[col])
-            self.table.column(col, width=widths[col], minwidth=70, stretch=(col == "title"))
-        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
-        self.table.configure(yscrollcommand=scrollbar.set)
-        self.table.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+            self.table.column(col, width=widths[col], minwidth=65, stretch=(col == "title"))
+        self.table.tag_configure("queued", foreground="#9bcaff")
+        self.table.tag_configure("preparing", foreground="#ffd887")
+        self.table.tag_configure("downloading", foreground="#ffd887")
+        self.table.tag_configure("retry_wait", foreground="#ffd887")
+        self.table.tag_configure("completed", foreground="#83dfaa")
+        self.table.tag_configure("failed", foreground="#ff9292")
+        self.table.tag_configure("cancelled", foreground="#d1b5ff")
+        vertical = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
+        horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
+        self.table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.table.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
 
-        progress_frame = tk.Frame(outer, bg="#111318")
-        progress_frame.pack(fill="x", pady=(8, 0))
-        tk.Label(
-            progress_frame, textvariable=self.progress_text_var,
-            bg="#111318", fg="#d1d9e6", anchor="w", font=("Segoe UI", 9, "bold")
-        ).pack(fill="x")
-        self.download_progress = ttk.Progressbar(
-            progress_frame, orient="horizontal", mode="determinate", maximum=100
+        transfer = tk.Frame(
+            outer, bg="#191f2a", highlightthickness=1, highlightbackground="#2a3342",
         )
-        self.download_progress.pack(fill="x", pady=(5, 0))
+        transfer.pack(fill="x", pady=(10, 0))
+        tk.Label(
+            transfer, text="CURRENT TRANSFER", bg="#191f2a", fg="#8795aa",
+            font=("Segoe UI", 8, "bold"), anchor="w",
+        ).pack(fill="x", padx=12, pady=(9, 0))
+        tk.Label(
+            transfer, textvariable=self.progress_text_var, bg="#191f2a", fg="#edf3fb",
+            anchor="w", font=("Segoe UI", 9, "bold"),
+        ).pack(fill="x", padx=12, pady=(3, 4))
+        self.download_progress = ttk.Progressbar(
+            transfer, orient="horizontal", mode="determinate", maximum=100,
+        )
+        self.download_progress.pack(fill="x", padx=12, pady=(0, 10))
 
-        controls = tk.Frame(outer, bg="#111318")
-        controls.pack(fill="x", pady=(12, 6))
-        self.start_button = self._button(controls, "Install / Download queue", self._start_queue, accent=True)
-        self.start_button.pack(side="left")
-        self.stop_button = self._button(controls, "Stop current attempt", self._stop_queue)
-        self.stop_button.pack(side="left", padx=7)
+        controls = tk.LabelFrame(
+            outer, text="  QUEUE CONTROLS  ", bg="#111318", fg="#8fa4bd",
+            bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
+        )
+        controls.pack(fill="x", pady=(10, 0))
+        for column in range(4):
+            controls.columnconfigure(column, weight=1, uniform="actions")
+        self.start_button = self._button(
+            controls, "START / RESUME QUEUE", self._start_queue, accent=True,
+        )
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=(9, 5), pady=(9, 5))
+        self.resume_selected_button = self._button(
+            controls, "RESUME SELECTED", self._resume_selected,
+        )
+        self.resume_selected_button.grid(row=0, column=1, sticky="ew", padx=5, pady=(9, 5))
+        self.resume_old_button = self._button(
+            controls, "RESUME OLD JOBS", self._resume_old_jobs,
+        )
+        self.resume_old_button.grid(row=0, column=2, sticky="ew", padx=5, pady=(9, 5))
+        self.stop_button = self._button(
+            controls, "PAUSE QUEUE", self._stop_queue,
+        )
+        self.stop_button.grid(row=0, column=3, sticky="ew", padx=(5, 9), pady=(9, 5))
         self.stop_button.configure(state="disabled")
-        self._button(controls, "Retry selected", self._retry_selected).pack(side="left", padx=7)
-        self._button(controls, "Remove selected", self._remove_selected).pack(side="left", padx=7)
-        self._button(controls, "Clear finished", self._clear_finished).pack(side="left", padx=7)
-        self.update_button = self._button(controls, "Check / Update", self._check_for_updates)
-        self.update_button.pack(side="right", padx=(7, 0))
-        self._button(controls, "Open item folder", self._open_item_folder).pack(side="right", padx=(7, 0))
-        self._button(controls, "Open logs", self._open_logs).pack(side="right")
-        tk.Label(outer, textvariable=self.status_var, bg="#111318", fg="#9ca8b9", anchor="w", font=("Segoe UI", 9)).pack(fill="x", pady=(2, 0))
-        self.log_view = tk.Text(outer, height=5, bg="#0c0e12", fg="#b8c6d9", insertbackground="#ffffff", relief="flat", font=("Consolas", 9), wrap="word", state="disabled")
-        self.log_view.pack(fill="x", pady=(8, 0))
 
+        self._button(controls, "Remove Selected", self._remove_selected).grid(
+            row=1, column=0, sticky="ew", padx=(9, 5), pady=(5, 9)
+        )
+        self._button(controls, "Clear Finished", self._clear_finished).grid(
+            row=1, column=1, sticky="ew", padx=5, pady=(5, 9)
+        )
+        self._button(controls, "Open Download Folder", self._open_item_folder).grid(
+            row=1, column=2, sticky="ew", padx=5, pady=(5, 9)
+        )
+        self._button(controls, "Open Logs", self._open_logs).grid(
+            row=1, column=3, sticky="ew", padx=(5, 9), pady=(5, 9)
+        )
+
+        self.status_label = tk.Label(
+            outer, textvariable=self.status_var, bg="#111318", fg="#a9b7ca",
+            anchor="w", font=("Segoe UI", 9), wraplength=1150, justify="left",
+        )
+        self.status_label.pack(fill="x", pady=(7, 0))
+        log_header = tk.Label(
+            outer, text="ACTIVITY LOG", bg="#111318", fg="#8795aa",
+            anchor="w", font=("Segoe UI", 8, "bold"),
+        )
+        log_header.pack(fill="x", pady=(7, 2))
+        self.log_view = tk.Text(
+            outer, height=4, bg="#0c0e12", fg="#b8c6d9",
+            insertbackground="#ffffff", relief="flat", font=("Consolas", 9),
+            wrap="word", state="disabled",
+        )
+        self.log_view.pack(fill="x")
+    
     def _check_for_updates(self) -> None:
         """Check the stable GitHub Releases channel without blocking the Tk event loop."""
         if self.running:
@@ -317,13 +462,15 @@ class DownloaderApp(tk.Tk):
         self.status_var.set("Settings saved")
         return True
 
-    def _add_items(self) -> None:
+    def _add_items(self, *, start_after: bool = False) -> None:
         try:
             ids = parse_workshop_list(self.item_entry_var.get())
         except ValueError as exc:
             messagebox.showerror("Invalid Workshop item", str(exc))
+            self.status_var.set(f"Could not add downloads: {exc}")
             return
         if not ids:
+            self.status_var.set("Enter a Workshop ID or URL before adding a download.")
             return
         steam = self.steamcmd_var.get().strip()
         for item_id in ids:
@@ -335,8 +482,11 @@ class DownloaderApp(tk.Tk):
         if self.running:
             added_message += " New items will start when you resume the queue after this batch."
         self.status_var.set(added_message)
+        self._refresh_queue_summary()
         if steam and Path(steam).is_file():
             threading.Thread(target=self._lookup_metadata, args=(ids,), daemon=True, name="bo3wd-metadata").start()
+        if start_after:
+            self.after(80, self._start_queue)
 
     def _lookup_metadata(self, ids: list[str]) -> None:
         client = WorkshopMetadataClient()
@@ -482,40 +632,76 @@ class DownloaderApp(tk.Tk):
         max_attempts = int(data.get("max_attempts", 0) or 0)
         bytes_received = int(data.get("bytes_received", 0) or 0)
         expected_bytes = int(data.get("expected_bytes", 0) or 0)
-        progress = f"{min(100, bytes_received * 100 // expected_bytes)}%" if expected_bytes else ("Downloading…" if status == JobStatus.DOWNLOADING.value else "—")
+        progress = (
+            f"{min(100, bytes_received * 100 // expected_bytes)}%"
+            if expected_bytes
+            else ("Downloading…" if status == JobStatus.DOWNLOADING.value else "—")
+        )
         received = (
             f"{self._format_bytes(bytes_received)} / {self._format_bytes(expected_bytes)}"
-            if expected_bytes else f"{self._format_bytes(bytes_received)} received"
+            if expected_bytes
+            else f"{self._format_bytes(bytes_received)} received"
         )
         if isinstance(row, DownloadEvent) and row.speed_bytes_per_second > 0:
             received += f" · {self._format_bytes(row.speed_bytes_per_second)}/s"
-        title = str(data.get("title") or item_id)
-        title = title.replace("\n", " ")[:85]
-        values = (item_id, title, status.replace("_", " ").title(), f"{attempt}/{max_attempts or '—'}", progress, received)
+        title = str(data.get("title") or item_id).replace("\n", " ")[:85]
+        values = (
+            item_id, title, status.replace("_", " ").title(),
+            f"{attempt}/{max_attempts or '—'}", progress, received,
+        )
+        previous_status = None
         if self.table.exists(item_id):
-            self.table.item(item_id, values=values)
+            old_values = self.table.item(item_id, "values")
+            if len(old_values) > 2:
+                previous_status = str(old_values[2]).lower().replace(" ", "_")
+            self.table.item(item_id, values=values, tags=(status,))
         else:
-            self.table.insert("", "end", iid=item_id, values=values)
+            self.table.insert("", "end", iid=item_id, values=values, tags=(status,))
+        if previous_status != status:
+            self._refresh_queue_summary()
         if isinstance(row, DownloadEvent) and row.line:
             self._append_log(f"[{item_id} · try {row.attempt}] {row.line}")
         elif isinstance(row, DownloadEvent) and row.message:
             self._append_log(f"[{item_id}] {row.message}")
+
+    def _refresh_queue_summary(self) -> None:
+        counts = {"queued": 0, "active": 0, "completed": 0, "attention": 0}
+        for iid in self.table.get_children(""):
+            values = self.table.item(iid, "values")
+            if len(values) < 3:
+                continue
+            status = str(values[2]).lower().replace(" ", "_")
+            if status == JobStatus.QUEUED.value:
+                counts["queued"] += 1
+            elif status in {
+                JobStatus.PREPARING.value, JobStatus.DOWNLOADING.value, JobStatus.RETRY_WAIT.value,
+            }:
+                counts["active"] += 1
+            elif status == JobStatus.COMPLETED.value:
+                counts["completed"] += 1
+            else:
+                counts["attention"] += 1
+        for key, count in counts.items():
+            self.summary_vars[key].set(str(count))
 
     def _start_queue(self) -> None:
         if self.running or self.update_in_progress:
             return
         try:
             if not self._save_settings():
-                return
-            if not self.settings.get("steamcmd"):
+                self.status_var.set("Select your actual steamcmd.exe under SteamCMD Setup before starting downloads.")
                 return
             pending = self.history.pending_items()
             if not pending:
-                self.status_var.set("Queue is empty")
+                self.status_var.set(
+                    "No queued jobs. Add a Workshop ID above, select an old item and choose Resume Selected, "
+                    "or click Resume Old Jobs to retry failed/cancelled entries."
+                )
                 return
             policy = self._policy()
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("Setup error", str(exc))
+            self.status_var.set(f"Could not start queue: {exc}")
             return
         self.stop_event.clear()
         self.running = True
@@ -604,6 +790,46 @@ class DownloaderApp(tk.Tk):
         self.history.delete(item_id)
         self.table.delete(item_id)
         self.status_var.set(f"Removed {item_id} from the queue/history. Download files were not deleted.")
+
+    def _resume_selected(self) -> None:
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select a download",
+                "Select a queued, failed, cancelled, or completed Workshop item in the table first.",
+            )
+            return
+        item_id = selected[0]
+        if not self.history.requeue(item_id):
+            messagebox.showwarning(
+                "Cannot resume this item",
+                "This download is currently active or no longer exists. Pause the queue before retrying it.",
+            )
+            return
+        row = self.history.get(item_id)
+        if row:
+            self._upsert_row(row)
+        self.status_var.set(
+            f"Workshop item {item_id} queued to resume. Existing SteamCMD partial/download files are kept."
+        )
+        self._start_queue()
+
+    def _resume_old_jobs(self) -> None:
+        if self.running or self.update_in_progress:
+            return
+        count = self.history.requeue_retryable()
+        self._load_history()
+        pending = self.history.pending_items()
+        if not count and not pending:
+            self.status_var.set(
+                "No queued, failed, or cancelled downloads to resume. Add an ID above or select a completed row."
+            )
+            return
+        if count:
+            self.status_var.set(
+                f"Requeued {count} failed/cancelled old job(s). Existing partial data is preserved."
+            )
+        self._start_queue()
 
     def _retry_selected(self) -> None:
         selected = self.table.selection()
@@ -725,7 +951,8 @@ class DownloaderApp(tk.Tk):
                     self.current_id = None
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
-                    self.status_var.set(event[1] + " · data was not cleaned up")
+                    self._load_history()
+                    self.status_var.set(str(event[1]) + " · partial/downloaded data was not cleaned up")
         except queue.Empty:
             pass
         self.after(120, self._poll_events)
