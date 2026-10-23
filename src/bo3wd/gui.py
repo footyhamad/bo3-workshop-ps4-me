@@ -332,6 +332,21 @@ class DownloaderApp(tk.Tk):
                 self.progress_is_indeterminate = False
             self.download_progress.configure(mode="determinate", maximum=100, value=0)
             self.progress_text_var.set(f"{event.workshop_id}: preparing SteamCMD…")
+        elif event.status == JobStatus.RETRY_WAIT:
+            if self.progress_is_indeterminate:
+                self.download_progress.stop()
+                self.progress_is_indeterminate = False
+            self.download_progress.configure(mode="determinate", maximum=100)
+            if expected > 0:
+                percent = min(100.0, received * 100.0 / expected)
+                self.download_progress.configure(value=percent)
+                data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
+            else:
+                self.download_progress.configure(value=0)
+                data_text = f"{self._format_bytes(received)} received"
+            self.progress_text_var.set(
+                f"{event.workshop_id}: retrying · {data_text} retained"
+            )
         elif event.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             if self.progress_is_indeterminate:
                 self.download_progress.stop()
@@ -347,6 +362,7 @@ class DownloaderApp(tk.Tk):
                     self.download_progress.configure(value=min(100.0, received * 100.0 / expected))
                     data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
                 else:
+                    self.download_progress.configure(value=0)
                     data_text = f"{self._format_bytes(received)} received"
                 self.progress_text_var.set(
                     f"{event.workshop_id}: {event.status.value} · {data_text}"
