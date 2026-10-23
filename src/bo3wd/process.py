@@ -21,6 +21,13 @@ class ProcessResult:
     cancelled: bool = False
 
 
+def _windows_creation_flags() -> int:
+    """Return flags that group the child process without creating a console window."""
+    process_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return process_group | no_window
+
+
 class ProcessRunner:
     """Run a child without a shell, stream its output, and bound shutdown time."""
 
@@ -65,9 +72,7 @@ class ProcessRunner:
             # SteamCMD is a console executable. Without CREATE_NO_WINDOW it opens a
             # separate black console when started from the windowed GUI. stdout and
             # stderr remain piped, so live output still reaches the in-app log/progress.
-            kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-            )
+            kwargs["creationflags"] = _windows_creation_flags()
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0  # SW_HIDE
