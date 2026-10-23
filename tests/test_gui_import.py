@@ -179,3 +179,42 @@ def test_queue_summary_counts_queued_active_completed_and_attention():
         "completed": "1",
         "attention": "2",
     }
+
+
+def test_recover_partial_downloads_imports_numeric_cache_folders_without_deleting_files(tmp_path, monkeypatch):
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+
+    steamcmd = tmp_path / "scmd" / "steamcmd.exe"
+    steamcmd.parent.mkdir(parents=True)
+    steamcmd.write_bytes(b"fake test executable")
+    partial_root = steamcmd.parent / "steamapps" / "workshop" / "downloads" / "311210"
+    partial = partial_root / "3296316642"
+    partial.mkdir(parents=True)
+    marker = partial / "partial.bin"
+    marker.write_bytes(b"keep this partial data")
+    (partial_root / "README.txt").write_text("not an item id", encoding="utf-8")
+
+    added = []
+    status = SimpleNamespace(value="")
+
+    class FakeHistory:
+        def ensure_item(self, item, log_path=None):
+            added.append((item.workshop_id, log_path))
+
+    app = SimpleNamespace(
+        steamcmd_var=SimpleNamespace(get=lambda: str(steamcmd)),
+        history=FakeHistory(),
+        data_dir=tmp_path / "appdata",
+        _load_history=lambda: None,
+        status_var=status,
+        _start_queue=lambda: pytest.fail("declined automatic start should not start queue"),
+    )
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda *_a, **_k: False)
+    gui.DownloaderApp._recover_partial_downloads(app)
+
+    assert [entry[0] for entry in added] == ["3296316642"]
+    assert "Recovered 1 partial" in status.value
+    assert marker.read_bytes() == b"keep this partial data"
