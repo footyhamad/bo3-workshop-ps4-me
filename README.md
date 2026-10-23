@@ -8,6 +8,7 @@ A clean, standalone Windows-first rewrite of a Black Ops III Steam Workshop down
 - **Bounded retries.** Per-attempt watchdog, capped exponential backoff, and a no-progress guard prevent infinite loops. Authentication and explicit access/item errors stop early with a useful message.
 - **Conservative success checks.** A job is only marked complete when SteamCMD reports success for the exact requested ID, exits successfully, and the resulting content directory contains files. An old folder or a successful-looking log line alone is not enough.
 - **Silent SteamCMD with live transfer progress.** SteamCMD runs without a separate console window; its output still streams into a per-item log and the app. The UI shows downloaded bytes, total bytes and percentage when Steam's size metadata is available, plus observed transfer speed and an estimated ETA. When total size is unknown, it continues showing bytes downloaded and an indeterminate progress bar. On-disk data is an estimate of transfer progress, not a guaranteed network-byte counter.
+- **Version-safe updater.** The **Check / Update** button compares stable `MAJOR.MINOR.PATCH` versions numerically, ignores drafts and prereleases, and refuses downgrades. It downloads only the official GitHub Release executable, verifies its SHA-256 against the release manifest, then uses a hidden Windows helper to back up the old EXE, replace it after shutdown, and restart the app.
 - **Queue and history persist.** The UI queue/history is stored in SQLite; preferences are atomically written to JSON. Interrupted jobs are recovered into the queue after an abnormal exit. Closing or stopping the app does not clean up partial data.
 - **ID and URL input.** Paste one ID, a Steam Workshop URL, or a newline/comma/semicolon-separated list. Duplicate IDs are removed. A text list can be imported from disk.
 - **No third-party runtime dependencies.** The app uses Python's standard library and Tkinter. Tests use pytest; the Windows executable is built with PyInstaller.
@@ -34,6 +35,12 @@ python -m bo3wd
 Select your actual SteamCMD executable, for example `B:\scmd\steamcmd.exe`, and enter the Steam account name used for the saved SteamCMD login. If you have not initialized SteamCMD yet, run `steamcmd.exe +login <account> +quit` manually once and complete Steam Guard there. The app disables stdin for managed attempts so an unexpected password prompt cannot hang a background worker.
 
 The UI is the default when run without arguments. The main window has settings, an ID/URL entry box, file import, a persistent queue/history table with downloaded-data totals, a live progress bar, retry/remove controls, a live log pane, and buttons to open the logs or a selected item’s content folder.
+
+## Updating the application
+
+Use **Check / Update** in the packaged Windows EXE. It compares version numbers rather than strings, downloads only a stable published release that includes both `BO3WorkshopDownloader.exe` and `SHA256SUMS.txt`, and refuses to install if the checksum or version check fails. It never overwrites a running executable directly: a hidden helper waits for the app to exit, keeps a versioned backup, installs the staged file, and relaunches the app. Update-helper errors are recorded at `%LOCALAPPDATA%\\BO3WorkshopDownloader\\update.log`.
+
+The updater is available in v2.0.3 and later. Older builds do not contain it, so update to v2.0.3 manually once. The first stable release is published from **Actions → Stable Release → Run workflow**, using version `2.0.3`; the release workflow verifies that this exactly matches `pyproject.toml`, runs tests and lint, builds the EXE, generates the SHA-256 manifest, and publishes both assets. Later releases can be published from matching `vMAJOR.MINOR.PATCH` tags. When run from source with `python -m bo3wd`, the button opens the release page instead of trying to overwrite the Python interpreter.
 
 ## CLI
 
@@ -102,6 +109,7 @@ Output: `dist\BO3WorkshopDownloader.exe`.
 - `src/bo3wd/steamcmd.py` — SteamCMD discovery, saved-account lookup and safe argument construction.
 - `src/bo3wd/metadata.py` — public Workshop title/size metadata.
 - `src/bo3wd/storage.py` — atomic settings and SQLite queue/history.
-- `src/bo3wd/gui.py` — background-worker desktop interface.
+- `src/bo3wd/updater.py` — numeric version selection, official release asset checks, SHA-256 verification, and hidden Windows self-update helper.
+- `src/bo3wd/gui.py` — background-worker desktop interface and Check / Update button.
 - `src/bo3wd/cli.py` — command-line interface and diagnostics.
 - `tests/` — offline regression tests; no Steam login or live download required.
