@@ -12,10 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Must match the version in pyproject.toml, e.g. 2.0.3"
+        description: "Must match pyproject.toml and __version__, e.g. 2.0.4"
         required: true
         type: string
-        default: "2.0.3"
+        default: "2.0.4"
 
 permissions:
   contents: write
@@ -46,6 +46,15 @@ jobs:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           $declaredVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          $appSource = Get-Content -LiteralPath "src/bo3wd/__init__.py" -Raw
+          $appVersionMatch = [regex]::Match($appSource, '__version__\s*=\s*"([^"]+)"')
+          if (-not $appVersionMatch.Success) {
+            throw "Could not parse __version__ from src/bo3wd/__init__.py"
+          }
+          $appVersion = $appVersionMatch.Groups[1].Value
+          if ($appVersion -ne $declaredVersion) {
+            throw "Version mismatch: pyproject.toml declares $declaredVersion but src/bo3wd/__init__.py declares $appVersion."
+          }
           if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
             $tag = "v$env:REQUESTED_VERSION"
           } elseif ($env:GITHUB_REF_TYPE -eq "tag") {
