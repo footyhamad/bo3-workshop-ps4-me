@@ -204,9 +204,9 @@ class DownloadEngine:
                 nonlocal current_speed, current_eta, current_sample_bytes, current_sample_at, last_line_byte_count
                 now = time.monotonic()
                 elapsed_sample = now - current_sample_at
-                # Recursive tree scans can be expensive for Workshop items with thousands of files.
-                # Sample at most every 1.5s, not for every line SteamCMD prints.
-                if elapsed_sample < 1.5:
+                # Recursive tree scans can be expensive, but a long interval makes small/medium
+                # downloads appear frozen. Sample at the ProcessRunner tick cadence (~0.75s).
+                if elapsed_sample < 0.70:
                     return
                 observed_bytes = self._current_bytes(item_id)
                 delta_bytes = max(0, observed_bytes - current_sample_bytes)
