@@ -240,10 +240,10 @@ class DownloaderApp(tk.Tk):
         )
         add.pack(fill="x", pady=(0, 10), ipady=3)
         add.columnconfigure(0, weight=1)
-        self._entry(add, self.item_entry_var).grid(
+        self.item_entry = self._entry(add, self.item_entry_var)
+        self.item_entry.grid(
             row=0, column=0, sticky="ew", padx=(12, 7), pady=8, ipady=5
         )
-        self.item_entry = add.winfo_children()[0]
         self.item_entry.bind("<Return>", lambda _event: self._add_items(start_after=True))
         self._button(add, "Add to Queue", self._add_items).grid(
             row=0, column=1, padx=5, pady=7
@@ -313,7 +313,7 @@ class DownloaderApp(tk.Tk):
             bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
         )
         controls.pack(fill="x", pady=(10, 0))
-        for column in range(4):
+        for column in range(5):
             controls.columnconfigure(column, weight=1, uniform="actions")
         self.start_button = self._button(
             controls, "START / RESUME QUEUE", self._start_queue, accent=True,
@@ -333,17 +333,20 @@ class DownloaderApp(tk.Tk):
         self.stop_button.grid(row=0, column=3, sticky="ew", padx=(5, 9), pady=(9, 5))
         self.stop_button.configure(state="disabled")
 
-        self._button(controls, "Remove Selected", self._remove_selected).grid(
+        self._button(controls, "Recover Partial Files", self._recover_partial_downloads).grid(
             row=1, column=0, sticky="ew", padx=(9, 5), pady=(5, 9)
         )
-        self._button(controls, "Clear Finished", self._clear_finished).grid(
+        self._button(controls, "Remove Selected", self._remove_selected).grid(
             row=1, column=1, sticky="ew", padx=5, pady=(5, 9)
         )
-        self._button(controls, "Open Download Folder", self._open_item_folder).grid(
+        self._button(controls, "Clear Finished", self._clear_finished).grid(
             row=1, column=2, sticky="ew", padx=5, pady=(5, 9)
         )
+        self._button(controls, "Open Download Folder", self._open_item_folder).grid(
+            row=1, column=3, sticky="ew", padx=5, pady=(5, 9)
+        )
         self._button(controls, "Open Logs", self._open_logs).grid(
-            row=1, column=3, sticky="ew", padx=(5, 9), pady=(5, 9)
+            row=1, column=4, sticky="ew", padx=(5, 9), pady=(5, 9)
         )
 
         self.status_label = tk.Label(
@@ -817,6 +820,61 @@ class DownloaderApp(tk.Tk):
         self.table.delete(item_id)
         self._refresh_queue_summary()
         self.status_var.set(f"Removed {item_id} from the queue/history. Download files were not deleted.")
+
+    def _recover_partial_downloads(self) -> None:
+        """Rebuild queue rows from SteamCMD's on-disk partial Workshop directories."""
+        steamcmd_text = self.steamcmd_var.get().strip()
+        steamcmd = Path(steamcmd_text).expanduser()
+        if not steamcmd.is_file():
+            messagebox.showerror(
+                "SteamCMD required",
+                "Choose the actual steamcmd.exe under SteamCMD Setup before recovering partial downloads.",
+            )
+            self.status_var.set("Recovery needs a valid SteamCMD executable path.")
+            return
+
+        partial_root = steamcmd.resolve().parent / "steamapps" / "workshop" / "downloads" / "311210"
+        try:
+            item_ids = sorted(
+                child.name
+                for child in partial_root.iterdir()
+                if child.is_dir() and child.name.isascii() and child.name.isdigit() and len(child.name) <= 20
+            )
+        except FileNotFoundError:
+            item_ids = []
+        except OSError as exc:
+            messagebox.showerror("Could not scan partial downloads", str(exc))
+            return
+
+        if not item_ids:
+            self.status_var.set(f"No partial Workshop folders found at {partial_root}. No files were changed.")
+            messagebox.showinfo(
+                "No partial downloads found",
+                "No numeric Workshop-ID folders were found in SteamCMD's partial-download cache. "
+                "The existing cache was not modified.",
+            )
+            return
+
+        log_root = self.data_dir / "logs"
+        for item_id in item_ids:
+            try:
+                self.history.ensure_item(
+                    WorkshopItem(workshop_id=item_id, title=item_id),
+                    log_root / f"{item_id}.log",
+                )
+            except ValueError:
+                continue
+        self._load_history()
+        self.status_var.set(
+            f"Recovered {len(item_ids)} partial Workshop folder(s) into the queue. "
+            "SteamCMD cache files have not been altered."
+        )
+        if messagebox.askyesno(
+            "Resume recovered downloads?",
+            f"Found {len(item_ids)} partial Workshop folder(s). Add them to the queue and start all queued jobs now?\n\n"
+            "Existing partial and completed files will be kept.",
+        ):
+            self._start_queue()
 
     def _resume_selected(self) -> None:
         selected = self.table.selection()
