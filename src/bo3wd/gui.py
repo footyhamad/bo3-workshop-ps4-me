@@ -153,7 +153,11 @@ class DownloaderApp(tk.Tk):
         self.update_button = self._button(
             header, "Check for Updates", self._check_for_updates, accent=True
         )
-        self.update_button.pack(side="right", anchor="ne", padx=(12, 0), pady=4)
+        self.update_button.pack(side="right", anchor="ne", padx=(8, 0), pady=4)
+        self.integrity_button = self._button(
+            header, "Check File Integrity", self._check_file_integrity,
+        )
+        self.integrity_button.pack(side="right", anchor="ne", padx=(8, 0), pady=4)
         title_area = tk.Frame(header, bg="#111318")
         title_area.pack(side="left", fill="x", expand=True)
         tk.Label(
@@ -278,6 +282,53 @@ class DownloaderApp(tk.Tk):
         )
         self.download_progress.pack(fill="x", padx=12, pady=(0, 12))
 
+        controls = tk.LabelFrame(
+            outer, text="  QUEUE CONTROLS  ", bg="#111318", fg="#8fa4bd",
+            bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
+        )
+        controls.pack(fill="x", pady=(10, 0))
+        primary_actions = tk.Frame(controls, bg="#111318")
+        primary_actions.pack(fill="x", padx=5, pady=(5, 0))
+        for column in range(4):
+            primary_actions.columnconfigure(column, weight=1, uniform="primary-actions")
+        self.start_button = self._button(
+            primary_actions, "START / RESUME QUEUE", self._start_queue, accent=True,
+        )
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        self.resume_selected_button = self._button(
+            primary_actions, "RESUME SELECTED", self._resume_selected,
+        )
+        self.resume_selected_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        self.resume_old_button = self._button(
+            primary_actions, "RESUME OLD JOBS", self._resume_old_jobs,
+        )
+        self.resume_old_button.grid(row=0, column=2, sticky="ew", padx=4, pady=4)
+        self.stop_button = self._button(
+            primary_actions, "PAUSE QUEUE", self._stop_queue,
+        )
+        self.stop_button.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        self.stop_button.configure(state="disabled")
+
+        utility_actions = tk.Frame(controls, bg="#111318")
+        utility_actions.pack(fill="x", padx=5, pady=(0, 5))
+        for column in range(5):
+            utility_actions.columnconfigure(column, weight=1, uniform="utility-actions")
+        self._button(utility_actions, "Recover Partial Files", self._recover_partial_downloads).grid(
+            row=0, column=0, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Remove Selected", self._remove_selected).grid(
+            row=0, column=1, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Clear Finished", self._clear_finished).grid(
+            row=0, column=2, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Open Download Folder", self._open_item_folder).grid(
+            row=0, column=3, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Open Logs", self._open_logs).grid(
+            row=0, column=4, sticky="ew", padx=4, pady=4
+        )
+
         table_frame = tk.Frame(outer, bg="#111318")
         table_frame.pack(fill="both", expand=True)
         table_frame.rowconfigure(0, weight=1)
@@ -308,57 +359,6 @@ class DownloaderApp(tk.Tk):
         self.table.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
-
-        controls = tk.LabelFrame(
-            outer, text="  QUEUE CONTROLS  ", bg="#111318", fg="#8fa4bd",
-            bd=1, relief="groove", font=("Segoe UI", 9, "bold"), labelanchor="nw",
-        )
-        controls.pack(fill="x", pady=(10, 0))
-        primary_actions = tk.Frame(controls, bg="#111318")
-        primary_actions.pack(fill="x", padx=5, pady=(5, 0))
-        for column in range(4):
-            primary_actions.columnconfigure(column, weight=1, uniform="primary-actions")
-        self.start_button = self._button(
-            primary_actions, "START / RESUME QUEUE", self._start_queue, accent=True,
-        )
-        self.start_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
-        self.resume_selected_button = self._button(
-            primary_actions, "RESUME SELECTED", self._resume_selected,
-        )
-        self.resume_selected_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        self.resume_old_button = self._button(
-            primary_actions, "RESUME OLD JOBS", self._resume_old_jobs,
-        )
-        self.resume_old_button.grid(row=0, column=2, sticky="ew", padx=4, pady=4)
-        self.stop_button = self._button(
-            primary_actions, "PAUSE QUEUE", self._stop_queue,
-        )
-        self.stop_button.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
-        self.stop_button.configure(state="disabled")
-
-        utility_actions = tk.Frame(controls, bg="#111318")
-        utility_actions.pack(fill="x", padx=5, pady=(0, 5))
-        for column in range(6):
-            utility_actions.columnconfigure(column, weight=1, uniform="utility-actions")
-        self._button(utility_actions, "Recover Partial Files", self._recover_partial_downloads).grid(
-            row=0, column=0, sticky="ew", padx=4, pady=4
-        )
-        self.integrity_button = self._button(
-            utility_actions, "Check File Integrity", self._check_file_integrity,
-        )
-        self.integrity_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        self._button(utility_actions, "Remove Selected", self._remove_selected).grid(
-            row=0, column=2, sticky="ew", padx=4, pady=4
-        )
-        self._button(utility_actions, "Clear Finished", self._clear_finished).grid(
-            row=0, column=3, sticky="ew", padx=4, pady=4
-        )
-        self._button(utility_actions, "Open Download Folder", self._open_item_folder).grid(
-            row=0, column=4, sticky="ew", padx=4, pady=4
-        )
-        self._button(utility_actions, "Open Logs", self._open_logs).grid(
-            row=0, column=5, sticky="ew", padx=4, pady=4
-        )
 
         self.status_label = tk.Label(
             outer, textvariable=self.status_var, bg="#111318", fg="#a9b7ca",
