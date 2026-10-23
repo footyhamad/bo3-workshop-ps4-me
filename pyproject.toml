@@ -8,6 +8,10 @@ version = "2.0.3"
 description = "A resilient Black Ops III Steam Workshop downloader for Windows"
 readme = "README.md"
 requires-python = ">=3.11"
+
+[project.urls]
+Homepage = "https://github.com/footyhamad/bo3-workshop-ps4-me"
+Issues = "https://github.com/footyhamad/bo3-workshop-ps4-me/issues"
 license = { file = "LICENSE" }
 authors = [{ name = "BO3 Workshop Downloader contributors" }]
 keywords = ["Black Ops III", "SteamCMD", "Workshop", "downloader"]
