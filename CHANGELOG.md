@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.4 — visible update and queue recovery dashboard
+
+- Moved the update action into the application header so it cannot be pushed off-screen by queue controls.
+- Redesigned the main dashboard with live queue counts, clearer sections, status colors, and a responsive two-row controls layout.
+- Added Add + Start, Resume Selected, Resume Old Jobs, and Recover Partial Files actions; Enter adds and starts, double-click resumes a selected row.
+- Added a safe partial-cache recovery scan that restores numeric Workshop IDs from SteamCMD's existing cache without deleting or overwriting those files.
+- Improved empty-queue and missing-SteamCMD messages, and added regression tests for queue summaries, history recovery, and partial-cache discovery.
+
+
 ## 2.0.3 — version-safe self-updater
 
 - Added a dedicated Check / Update button that queries stable GitHub Releases without blocking the UI.
