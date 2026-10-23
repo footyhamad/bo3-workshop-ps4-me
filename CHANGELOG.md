@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.5 — SteamCMD Workshop integrity checking
+
+- Added a Check File Integrity action for the selected installed Workshop item or all installed content folders.
+- Runs SteamCMD's native Workshop `validate` operation in a background worker with bounded single-attempt checks and supports cancellation.
+- Writes timestamped JSON reports with per-item status, logs, content paths, and a summary; no partial-cache cleanup is performed.
+- Added tests for integrity target selection, report writing, and validation-mode execution.
+
+
 ## 2.0.4 — visible update and queue recovery dashboard
 
 - Moved the update action into the application header so it cannot be pushed off-screen by queue controls.
