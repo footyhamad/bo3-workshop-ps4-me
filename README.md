@@ -7,7 +7,7 @@ A clean, standalone Windows-first rewrite of a Black Ops III Steam Workshop down
 - **Resumes through SteamCMD itself.** On timeouts/network failures, it reruns the same Workshop request so SteamCMD can reuse its partial chunks. The downloader never deletes `steamapps/workshop/downloads/311210/<id>` or downloaded content as part of retries.
 - **Bounded retries.** Per-attempt watchdog, capped exponential backoff, and a no-progress guard prevent infinite loops. Authentication and explicit access/item errors stop early with a useful message.
 - **Conservative success checks.** A job is only marked complete when SteamCMD reports success for the exact requested ID, exits successfully, and the resulting content directory contains files. An old folder or a successful-looking log line alone is not enough.
-- **Live output and durable diagnostics.** SteamCMD output is streamed into a per-item log. The UI shows approximate progress from Steam's reported item size, observed disk throughput, and an ETA when enough data exists. Progress is labelled *estimated* because Workshop item size and on-disk bytes are not guaranteed to match exactly.
+- **Silent SteamCMD with live transfer progress.** SteamCMD runs without a separate console window; its output still streams into a per-item log and the app. The UI shows downloaded bytes, total bytes and percentage when Steam's size metadata is available, plus observed transfer speed and an estimated ETA. When total size is unknown, it continues showing bytes downloaded and an indeterminate progress bar. On-disk data is an estimate of transfer progress, not a guaranteed network-byte counter.
 - **Queue and history persist.** The UI queue/history is stored in SQLite; preferences are atomically written to JSON. Interrupted jobs are recovered into the queue after an abnormal exit. Closing or stopping the app does not clean up partial data.
 - **ID and URL input.** Paste one ID, a Steam Workshop URL, or a newline/comma/semicolon-separated list. Duplicate IDs are removed. A text list can be imported from disk.
 - **No third-party runtime dependencies.** The app uses Python's standard library and Tkinter. Tests use pytest; the Windows executable is built with PyInstaller.
@@ -33,7 +33,7 @@ python -m bo3wd
 
 Select your actual SteamCMD executable, for example `B:\scmd\steamcmd.exe`, and enter the Steam account name used for the saved SteamCMD login. If you have not initialized SteamCMD yet, run `steamcmd.exe +login <account> +quit` manually once and complete Steam Guard there. The app disables stdin for managed attempts so an unexpected password prompt cannot hang a background worker.
 
-The UI is the default when run without arguments. The main window has settings, an ID/URL entry box, file import, a persistent queue/history table, retry/remove controls, a live log pane, and buttons to open the logs or a selected item’s content folder.
+The UI is the default when run without arguments. The main window has settings, an ID/URL entry box, file import, a persistent queue/history table with downloaded-data totals, a live progress bar, retry/remove controls, a live log pane, and buttons to open the logs or a selected item’s content folder.
 
 ## CLI
 
