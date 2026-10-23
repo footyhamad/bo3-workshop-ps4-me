@@ -232,7 +232,7 @@ class DownloadEngine:
                     telemetry = self._event(
                         item, JobStatus.DOWNLOADING, attempt=attempt, message="Transfer telemetry",  # noqa: B023
                         log_path=log_path, started=started, bytes_received=last_line_byte_count,  # noqa: B023
-                        speed_bytes_per_second=current_speed, eta_seconds=current_eta,
+                        speed_bytes_per_second=current_speed, eta_seconds=current_eta,  # noqa: B023
                     )
                     try:
                         self.event_sink(telemetry)
@@ -263,8 +263,8 @@ class DownloadEngine:
                     event = self._event(
                         item, JobStatus.DOWNLOADING, attempt=attempt, message=line[:500],  # noqa: B023
                         log_path=log_path, started=started, line=line,
-                        bytes_received=last_line_byte_count,
-                        speed_bytes_per_second=current_speed, eta_seconds=current_eta,
+                        bytes_received=last_line_byte_count,  # noqa: B023
+                        speed_bytes_per_second=current_speed, eta_seconds=current_eta,  # noqa: B023
                     )
                     try:
                         self.event_sink(event)
