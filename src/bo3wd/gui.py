@@ -327,6 +327,10 @@ class DownloaderApp(tk.Tk):
                     + " · waiting for Steam's total-size metadata"
                 )
         elif event.status == JobStatus.PREPARING:
+            if self.progress_is_indeterminate:
+                self.download_progress.stop()
+                self.progress_is_indeterminate = False
+            self.download_progress.configure(mode="determinate", maximum=100, value=0)
             self.progress_text_var.set(f"{event.workshop_id}: preparing SteamCMD…")
         elif event.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             if self.progress_is_indeterminate:
