@@ -108,3 +108,11 @@ def test_runner_supports_cancellation(tmp_path):
     assert result.cancelled is True
     assert result.timed_out is False
     assert "cancel requested" in log.read_text(encoding="utf-8")
+
+def test_windows_process_flags_suppress_console_window():
+    from bo3wd.process import _windows_creation_flags
+
+    flags = _windows_creation_flags()
+    assert flags & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
+
