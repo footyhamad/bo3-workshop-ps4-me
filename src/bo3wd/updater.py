@@ -24,6 +24,7 @@ CHECKSUM_NAME = "SHA256SUMS.txt"
 MAX_EXECUTABLE_BYTES = 250 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 64 * 1024
 _ALLOWED_DOWNLOAD_HOSTS = {
+    "api.github.com",
     "github.com",
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
