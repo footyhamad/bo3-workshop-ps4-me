@@ -217,6 +217,22 @@ class JobHistory:
             )
             return cursor.rowcount > 0
 
+    def requeue_retryable(self) -> int:
+        """Queue failed/cancelled jobs again without touching any SteamCMD files."""
+        now = time.time()
+        with self._session() as db:
+            cursor = db.execute(
+                "UPDATE jobs SET status=?, message=?, updated_at=?, finished_at=NULL WHERE status IN (?,?)",
+                (
+                    JobStatus.QUEUED.value,
+                    "Queued again by Resume Old Jobs; existing partial/download files were preserved.",
+                    now,
+                    JobStatus.FAILED.value,
+                    JobStatus.CANCELLED.value,
+                ),
+            )
+            return cursor.rowcount
+
     def clear_finished(self) -> int:
         with self._session() as db:
             cursor = db.execute(
