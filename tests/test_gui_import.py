@@ -198,7 +198,13 @@ def test_recover_partial_downloads_imports_numeric_cache_folders_without_deletin
     (partial_root / "README.txt").write_text("not an item id", encoding="utf-8")
 
     added = []
-    status = SimpleNamespace(value="")
+    class FakeStatus:
+        value = ""
+
+        def set(self, value):
+            self.value = value
+
+    status = FakeStatus()
 
     class FakeHistory:
         def ensure_item(self, item, log_path=None):
