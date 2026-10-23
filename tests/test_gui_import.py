@@ -1,5 +1,7 @@
-import pytest
+import json
 from pathlib import Path
+
+import pytest
 
 
 def test_gui_module_import_does_not_create_window_or_make_network_request():
