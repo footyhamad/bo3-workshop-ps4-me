@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 
 def test_gui_module_import_does_not_create_window_or_make_network_request():
@@ -224,3 +225,71 @@ def test_recover_partial_downloads_imports_numeric_cache_folders_without_deletin
     assert [entry[0] for entry in added] == ["3296316642"]
     assert "Recovered 1 partial" in status.value
     assert marker.read_bytes() == b"keep this partial data"
+
+
+def test_integrity_worker_forces_steamcmd_validation_and_writes_a_report(tmp_path, monkeypatch):
+    pytest.importorskip("tkinter")
+    import queue
+    import threading
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+    from bo3wd.models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
+
+    steamcmd = tmp_path / "steamcmd" / "steamcmd.exe"
+    steamcmd.parent.mkdir(parents=True)
+    steamcmd.write_bytes(b"placeholder")
+    paths = DownloadPaths.from_steamcmd(steamcmd, tmp_path / "appdata")
+    events = queue.Queue()
+    captured = {}
+
+    class FakeEngine:
+        def __init__(self, paths_arg, username, *, policy, validate, history, event_sink):
+            captured["paths"] = paths_arg
+            captured["username"] = username
+            captured["policy"] = policy
+            captured["validate"] = validate
+            captured["history"] = history
+            captured["event_sink"] = event_sink
+
+        def download(self, item, cancel_event):
+            assert not cancel_event.is_set()
+            return DownloadEvent(
+                workshop_id=item.workshop_id,
+                status=JobStatus.COMPLETED,
+                message="Download complete and verified",
+                log_path=str(tmp_path / "item.log"),
+            )
+
+    history = object()
+    monkeypatch.setattr(gui, "DownloadEngine", FakeEngine)
+    app = SimpleNamespace(
+        settings={"steam_user": "test-account"},
+        history=history,
+        events=events,
+        stop_event=threading.Event(),
+        current_id=None,
+        data_dir=tmp_path / "appdata",
+    )
+    policy = DownloadPolicy(
+        max_attempts=1, attempt_timeout_seconds=60,
+        initial_backoff_seconds=0, max_backoff_seconds=0, max_stagnant_attempts=1,
+    )
+
+    gui.DownloaderApp._run_integrity_check(
+        app, [WorkshopItem("3296316642", title="Death Spiral")], paths, policy
+    )
+
+    assert captured["validate"] is True
+    assert captured["policy"].max_attempts == 1
+    assert captured["username"] == "test-account"
+    event = events.get_nowait()
+    assert event[0] == "message"
+    done = events.get_nowait()
+    assert done[0] == "integrity_done"
+    summary = done[1]
+    assert not summary["report_error"]
+    assert summary["results"][0]["status"] == "completed"
+    assert summary["results"][0]["workshop_id"] == "3296316642"
+    report = json.loads(Path(summary["report_path"]).read_text(encoding="utf-8"))
+    assert report["summary"]["verified"] == 1
