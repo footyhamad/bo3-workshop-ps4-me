@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.3 — version-safe self-updater
+
+- Added a dedicated Check / Update button that queries stable GitHub Releases without blocking the UI.
+- Compares strict numeric MAJOR.MINOR.PATCH versions and never downgrades a newer installed version.
+- Downloads only official release assets and verifies the executable SHA-256 against the release manifest before staging.
+- Uses a hidden Windows helper to wait for shutdown, back up the old executable, replace it, and restart; records helper failures in the app-data update log.
+- Added a stable-release workflow that enforces exact tag/package version matching and publishes the EXE plus checksum manifest.
+
+
 ## 2.0.2 — silent install and live progress
 
 - Suppressed the separate SteamCMD console window while keeping stdout/stderr captured for logs.
