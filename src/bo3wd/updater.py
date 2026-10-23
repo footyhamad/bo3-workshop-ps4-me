@@ -65,7 +65,7 @@ def _request_bytes(url: str, *, timeout: float, max_bytes: int, github_json: boo
     if parsed.scheme != "https" or (parsed.hostname or "").lower() not in _ALLOWED_DOWNLOAD_HOSTS:
         raise UpdateError("The update server returned an untrusted download URL.")
     headers = {
-        "User-Agent": f"BO3WorkshopDownloader/{APP_EXE_NAME}",
+        "User-Agent": "BO3WorkshopDownloader-Updater/2.0",
         "Accept": "application/vnd.github+json" if github_json else "application/octet-stream",
         "X-GitHub-Api-Version": "2022-11-28",
     }
