@@ -1244,7 +1244,7 @@ class DownloaderApp(tk.Tk):
 
     def _delete_old_partial_data(self) -> None:
         """Offer a preview before removing stale folders from SteamCMD's partial cache."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or self.steam_import_in_progress:
             messagebox.showwarning(
                 "Downloader busy",
                 "Pause the download/repair operation before cleaning partial-download data.",

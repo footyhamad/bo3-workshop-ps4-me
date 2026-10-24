@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Must match pyproject.toml and __version__, e.g. 2.2.0"
+        description: "Must match pyproject.toml and __version__, e.g. 2.3.0"
         required: true
         type: string
         default: "2.3.0"

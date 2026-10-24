@@ -344,9 +344,9 @@ def import_steam_client_item(
                     conflicts.append(relative.as_posix())
                 continue
 
-            def report_file_progress(current_file_bytes: int) -> None:
+            def report_file_progress(current_file_bytes: int, base_bytes: int = bytes_copied) -> None:
                 if on_progress is not None:
-                    on_progress(bytes_copied + current_file_bytes)
+                    on_progress(base_bytes + current_file_bytes)
 
             file_bytes = _copy_new_file(src, target, report_file_progress)
             copied += 1
