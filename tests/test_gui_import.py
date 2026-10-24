@@ -83,8 +83,8 @@ def test_download_progress_uses_live_bytes_without_size_reporting():
 
     assert bar.values["mode"] == "indeterminate"
     assert bar.started is True
-    assert "1.0 MB downloaded" in label.value
-    assert "500.0 KB/s" in label.value
+    assert "976 KB downloaded" in label.value
+    assert "488 KB/s" in label.value
     assert "4.0 MB" not in label.value
     assert "%" not in label.value
 
@@ -137,8 +137,8 @@ def test_download_progress_shows_received_bytes_when_total_size_is_unknown():
 
     assert bar.values["mode"] == "indeterminate"
     assert bar.started is True
-    assert "2.5 MB downloaded" in label.value
-    assert "250.0 KB/s" in label.value
+    assert "2,441 KB downloaded" in label.value
+    assert "244 KB/s" in label.value
 
 
 def test_queue_summary_counts_queued_active_completed_and_attention():
