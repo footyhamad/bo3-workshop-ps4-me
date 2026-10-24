@@ -649,6 +649,9 @@ class DownloaderApp(tk.Tk):
         return True
 
     def _add_items(self, *, start_after: bool = False) -> None:
+        if getattr(self, "partial_cleanup_in_progress", False):
+            messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before queue changes.")
+            return
         try:
             ids = parse_workshop_list(self.item_entry_var.get())
         except ValueError as exc:
@@ -1247,6 +1250,14 @@ class DownloaderApp(tk.Tk):
             )
             return
         partial_root = steamcmd.resolve().parent / "steamapps" / "workshop" / "downloads" / "311210"
+        # Do not follow a redirected SteamCMD cache path during a destructive operation.
+        if any(path_part.is_symlink() for path_part in (partial_root, *list(partial_root.parents)[:4])):
+            messagebox.showerror(
+                "Unsafe partial-cache path",
+                "A directory in the SteamCMD partial-cache path is a symbolic link. "
+                "Cleanup was refused; no files were changed.",
+            )
+            return
         protect_statuses = {
             JobStatus.QUEUED.value, JobStatus.PREPARING.value,
             JobStatus.DOWNLOADING.value, JobStatus.RETRY_WAIT.value,
@@ -1379,6 +1390,9 @@ class DownloaderApp(tk.Tk):
         messagebox.showerror("Partial cleanup failed", error)
 
     def _recover_partial_downloads(self) -> None:
+        if getattr(self, "partial_cleanup_in_progress", False):
+            messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before recovering partials.")
+            return
         """Rebuild queue rows from SteamCMD's on-disk partial Workshop directories."""
         steamcmd_text = self.steamcmd_var.get().strip()
         steamcmd = Path(steamcmd_text).expanduser()
@@ -1434,6 +1448,9 @@ class DownloaderApp(tk.Tk):
             self._start_queue()
 
     def _resume_selected(self) -> None:
+        if getattr(self, "partial_cleanup_in_progress", False):
+            messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before resuming jobs.")
+            return
         selected = self.table.selection()
         if not selected:
             messagebox.showinfo(
@@ -1457,6 +1474,9 @@ class DownloaderApp(tk.Tk):
         self._start_queue()
 
     def _resume_old_jobs(self) -> None:
+        if getattr(self, "partial_cleanup_in_progress", False):
+            messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before resuming jobs.")
+            return
         if self.running or self.update_in_progress:
             return
         count = self.history.requeue_retryable()
@@ -1474,6 +1494,9 @@ class DownloaderApp(tk.Tk):
         self._start_queue()
 
     def _retry_selected(self) -> None:
+        if getattr(self, "partial_cleanup_in_progress", False):
+            messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before requeuing jobs.")
+            return
         selected = self.table.selection()
         if not selected:
             return
