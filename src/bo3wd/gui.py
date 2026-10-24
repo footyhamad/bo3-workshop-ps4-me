@@ -24,7 +24,7 @@ from .integrity import (
 )
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
 from .network import NetworkSpeedMeter
-from .partials import DEFAULT_STALE_DAYS, PartialFolder, delete_old_partial_folders, find_stale_partial_folders
+from .partials import DEFAULT_STALE_DAYS, delete_old_partial_folders, find_stale_partial_folders
 from .preflight import assess_disk_space
 from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
@@ -716,12 +716,8 @@ class DownloaderApp(tk.Tk):
             self.network_speed_var.set(
                 f"NETWORK ↓ {self._format_rate(receive)}  ↑ {self._format_rate(send)}"
             )
-        except (OSError, AttributeError, ValueError, TypeError) as exc:
+        except (OSError, AttributeError, ValueError, TypeError):
             self.network_speed_var.set("NETWORK meter unavailable")
-            try:
-                self._append_log(f"[NETWORK] {type(exc).__name__}: {exc}")
-            except (tk.TclError, AttributeError):
-                pass
         try:
             self.after(1000, self._update_network_speed)
         except tk.TclError:
@@ -890,10 +886,10 @@ class DownloaderApp(tk.Tk):
 
     def _check_file_integrity(self) -> None:
         """Run SteamCMD's native validation against already-installed Workshop items."""
-        if self.running or self.update_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
             messagebox.showwarning(
                 "Downloader busy",
-                "Finish or pause the current operation before starting an integrity check.",
+                "Finish or pause the current operation before starting an integrity check or partial cleanup.",
             )
             return
         if not self._save_settings():
