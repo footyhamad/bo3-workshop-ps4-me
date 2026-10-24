@@ -17,6 +17,10 @@ from .steamcmd import build_download_command
 from .storage import JobHistory
 
 _SUCCESS = re.compile(r"success\.\s+downloaded item\s+(\d+)\b", re.IGNORECASE)
+_ITEM_FAILURE = re.compile(
+    r"ERROR!\s*Download item\s+(\d+)\s+failed\s*\(([^)]*)\)",
+    re.IGNORECASE,
+)
 _AUTH = re.compile(
     r"cached credentials not found|login failure|invalid password|steam guard|"
     r"authenticator code|password\s*:|please enter.{0,40}(?:password|code)|not logged in|two.factor code",
@@ -202,6 +206,7 @@ class DownloadEngine:
             marker_seen = False
             auth_seen = False
             permanent_seen = False
+            item_failure_code: str | None = None
             current_sample_bytes = self._current_bytes(item_id)
             current_sample_at = time.monotonic()
             current_speed = 0.0
@@ -256,7 +261,7 @@ class DownloadEngine:
             )
 
             def handle_line(line: str) -> None:
-                nonlocal marker_seen, auth_seen, permanent_seen, last_ui_line_at
+                nonlocal marker_seen, auth_seen, permanent_seen, item_failure_code, last_ui_line_at
                 recent_lines.append(line)  # noqa: B023
                 if len(recent_lines) > 80:  # noqa: B023
                     del recent_lines[:20]  # noqa: B023
@@ -266,6 +271,9 @@ class DownloadEngine:
                     auth_seen = True
                 if _PERMANENT.search(line):
                     permanent_seen = True
+                item_failure = _ITEM_FAILURE.search(line)
+                if item_failure and item_failure.group(1) == item_id:
+                    item_failure_code = item_failure.group(2).strip() or "unknown"
                 update_progress_sample()
                 now = time.monotonic()
                 if self.event_sink is not None and now - last_ui_line_at >= 0.15:
@@ -324,6 +332,17 @@ class DownloadEngine:
             if permanent_seen or _PERMANENT.search(output):
                 detail = next((line for line in reversed(recent_lines) if _PERMANENT.search(line)), "Steam rejected this item.")
                 return emit(JobStatus.FAILED, attempt, f"Permanent Workshop error: {detail[:500]}", bytes_received=current_size)
+
+            if item_failure_code and not _TRANSIENT.search(item_failure_code):
+                return emit(
+                    JobStatus.FAILED,
+                    attempt,
+                    f"SteamCMD explicitly reported that Workshop item {item_id} failed "
+                    f"({item_failure_code}). SteamCMD can return exit code 0 for this error, "
+                    "so the download was not successful. Check whether the item is still "
+                    "available to download from its Workshop page. Partial files were preserved.",
+                    bytes_received=current_size,
+                )
 
             grew = current_size > last_observed_size
             if grew:
