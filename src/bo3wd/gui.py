@@ -23,6 +23,8 @@ from .integrity import (
     load_integrity_report, write_integrity_report,
 )
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
+from .network import NetworkSpeedMeter
+from .partials import DEFAULT_STALE_DAYS, PartialFolder, delete_old_partial_folders, find_stale_partial_folders
 from .preflight import assess_disk_space
 from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
@@ -72,6 +74,11 @@ class DownloaderApp(tk.Tk):
         self.status_var = tk.StringVar(value="Ready · partial downloads are preserved")
         self.progress_text_var = tk.StringVar(value="Ready · downloaded bytes and integrity-check progress appear here")
         self.progress_is_indeterminate = False
+        self.network_speed_var = tk.StringVar(value="NETWORK ↓ 0 KB/s  ↑ 0 KB/s")
+        self.network_meter = NetworkSpeedMeter()
+        self.partial_cleanup_in_progress = False
+        self._last_progress_bytes: int | None = None
+        self._last_progress_change_at = time.monotonic()
         self.item_entry_var = tk.StringVar()
         self.queue_search_var = tk.StringVar(value="")
         self.queue_status_filter_var = tk.StringVar(value="All statuses")
@@ -90,6 +97,7 @@ class DownloaderApp(tk.Tk):
                 f"Recovered {self.recovered_jobs} interrupted job(s) into the queue · partial files kept"
             )
         self.after(120, self._poll_events)
+        self.after(1000, self._update_network_speed)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
     def _setup_style(self) -> None:
@@ -367,10 +375,16 @@ class DownloaderApp(tk.Tk):
             outer, bg="#191f2a", highlightthickness=1, highlightbackground="#2a3342",
         )
         transfer.pack(fill="x", pady=(10, 8))
+        transfer_header = tk.Frame(transfer, bg="#191f2a")
+        transfer_header.pack(fill="x", padx=12, pady=(10, 0))
         tk.Label(
-            transfer, text="LIVE DOWNLOAD DATA / INTEGRITY STATUS", bg="#191f2a", fg="#8795aa",
+            transfer_header, text="LIVE DOWNLOAD DATA / INTEGRITY STATUS", bg="#191f2a", fg="#8795aa",
             font=("Segoe UI", 10, "bold"), anchor="w",
-        ).pack(fill="x", padx=12, pady=(10, 0))
+        ).pack(side="left")
+        tk.Label(
+            transfer_header, textvariable=self.network_speed_var, bg="#191f2a", fg="#75b9ff",
+            font=("Consolas", 9, "bold"), anchor="e",
+        ).pack(side="right")
         tk.Label(
             transfer, textvariable=self.progress_text_var, bg="#191f2a", fg="#edf3fb",
             anchor="w", font=("Segoe UI", 9, "bold"),
@@ -428,6 +442,12 @@ class DownloaderApp(tk.Tk):
         )
         self._button(utility_actions, "Integrity Reports", self._view_integrity_reports).grid(
             row=0, column=5, sticky="ew", padx=4, pady=4
+        )
+        self.partial_cleanup_button = self._button(
+            utility_actions, "Delete Old Partial Data", self._delete_old_partial_data,
+        )
+        self.partial_cleanup_button.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=(2, 5)
         )
 
         queue_tools = tk.Frame(outer, bg="#111318")
@@ -682,11 +702,46 @@ class DownloaderApp(tk.Tk):
             value /= 1000
         return f"{value:.1f} TB"
 
+    @staticmethod
+    def _format_rate(rate_bytes_per_second: float) -> str:
+        kib_per_second = max(0.0, float(rate_bytes_per_second)) / 1024
+        if kib_per_second >= 1024:
+            return f"{kib_per_second / 1024:.2f} MB/s"
+        return f"{kib_per_second:.0f} KB/s"
+
+    def _update_network_speed(self) -> None:
+        """Show system-wide RX/TX rates; unrelated application traffic is included."""
+        try:
+            receive, send = self.network_meter.sample()
+            self.network_speed_var.set(
+                f"NETWORK ↓ {self._format_rate(receive)}  ↑ {self._format_rate(send)}"
+            )
+        except (OSError, AttributeError, ValueError, TypeError) as exc:
+            self.network_speed_var.set("NETWORK meter unavailable")
+            try:
+                self._append_log(f"[NETWORK] {type(exc).__name__}: {exc}")
+            except (tk.TclError, AttributeError):
+                pass
+        try:
+            self.after(1000, self._update_network_speed)
+        except tk.TclError:
+            pass
+
     def _update_download_progress(self, event: DownloadEvent) -> None:
-        """Show observed transfer bytes only; total-size metadata is never required."""
+        """Show growing disk bytes in whole KB without waiting for total-size metadata."""
         received = max(0, int(event.bytes_received))
         speed = max(0.0, float(event.speed_bytes_per_second))
-        speed_text = f" · {self._format_bytes(speed)}/s" if speed > 0 else ""
+        now = time.monotonic()
+        last_bytes = getattr(self, "_last_progress_bytes", None)
+        last_change = float(getattr(self, "_last_progress_change_at", now))
+        if last_bytes is None or received != last_bytes:
+            self._last_progress_bytes = received
+            self._last_progress_change_at = now
+            last_change = now
+        stalled_seconds = max(0, int(now - last_change))
+        stall_note = f" · no new disk bytes for {stalled_seconds}s" if stalled_seconds >= 5 else ""
+        received_text = f"{received // 1024:,} KB"
+        speed_text = f" · {self._format_rate(speed)}" if speed > 0 else ""
 
         if event.status == JobStatus.DOWNLOADING:
             self.download_progress.configure(mode="indeterminate")
@@ -694,21 +749,21 @@ class DownloaderApp(tk.Tk):
                 self.download_progress.start(12)
                 self.progress_is_indeterminate = True
             self.progress_text_var.set(
-                f"{event.workshop_id}: {self._format_bytes(received)} downloaded{speed_text}"
+                f"{event.workshop_id}: {received_text} downloaded{speed_text}{stall_note}"
             )
         elif event.status == JobStatus.PREPARING:
             if self.progress_is_indeterminate:
                 self.download_progress.stop()
                 self.progress_is_indeterminate = False
             self.download_progress.configure(mode="determinate", maximum=100, value=0)
-            self.progress_text_var.set(f"{event.workshop_id}: preparing SteamCMD…")
+            self.progress_text_var.set(f"{event.workshop_id}: starting SteamCMD…")
         elif event.status == JobStatus.RETRY_WAIT:
             if self.progress_is_indeterminate:
                 self.download_progress.stop()
                 self.progress_is_indeterminate = False
             self.download_progress.configure(mode="determinate", maximum=100, value=0)
             self.progress_text_var.set(
-                f"{event.workshop_id}: retrying · {self._format_bytes(received)} retained"
+                f"{event.workshop_id}: retrying · {received_text} retained"
             )
         elif event.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             if self.progress_is_indeterminate:
@@ -718,12 +773,12 @@ class DownloaderApp(tk.Tk):
             if event.status == JobStatus.COMPLETED:
                 self.download_progress.configure(value=100)
                 self.progress_text_var.set(
-                    f"{event.workshop_id}: download complete · {self._format_bytes(received)} downloaded"
+                    f"{event.workshop_id}: download complete · {received_text} downloaded"
                 )
             else:
                 self.download_progress.configure(value=0)
                 self.progress_text_var.set(
-                    f"{event.workshop_id}: {event.status.value} · {self._format_bytes(received)} received"
+                    f"{event.workshop_id}: {event.status.value} · {received_text} received"
                 )
 
     def _upsert_row(self, row: dict[str, object] | DownloadEvent) -> None:
@@ -764,13 +819,13 @@ class DownloaderApp(tk.Tk):
         max_attempts = int(data.get("max_attempts", 0) or 0)
         bytes_received = int(data.get("bytes_received", 0) or 0)
         progress = "Downloading…" if status == JobStatus.DOWNLOADING.value else "—"
-        received = f"{self._format_bytes(bytes_received)} downloaded"
+        received = f"{bytes_received // 1024:,} KB downloaded"
         try:
             speed = max(0.0, float(data.get("speed_bytes_per_second", 0) or 0))
         except (TypeError, ValueError, OverflowError):
             speed = 0.0
         if speed > 0:
-            received += f" · {self._format_bytes(speed)}/s"
+            received += f" · {self._format_rate(speed)}"
         title = str(data.get("title") or item_id).replace("\\n", " ")[:85]
         values = (
             item_id, title, status.replace("_", " ").title(),
