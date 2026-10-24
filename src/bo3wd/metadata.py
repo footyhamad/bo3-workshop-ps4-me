@@ -200,14 +200,20 @@ class WorkshopMetadataClient:
             if not isinstance(entries, list):
                 raise MetadataError("Steam returned a malformed publishedfiledetails list")
             requested = set(ids)
+            do_not_page_fallback: set[str] = set()
             for item in entries:
-                if not isinstance(item, dict) or item.get("result") != 1:
+                if not isinstance(item, dict):
                     continue
                 item_id = str(item.get("publishedfileid", ""))
                 if item_id not in requested:
                     continue
+                # Do not re-query items explicitly identified as invalid or belonging to another game.
+                if item.get("result") != 1:
+                    do_not_page_fallback.add(item_id)
+                    continue
                 app_id = str(item.get("consumer_app_id", ""))
                 if app_id and app_id != APP_ID:
+                    do_not_page_fallback.add(item_id)
                     continue
                 try:
                     size_bytes = max(0, int(item.get("file_size") or 0))
@@ -229,7 +235,11 @@ class WorkshopMetadataClient:
             api_error = exc
 
         # Unknown size limits only percentage/ETA. It must never prevent starting a download.
-        fallback_ids = [item_id for item_id in ids if item_id not in result or result[item_id].expected_bytes <= 0]
+        fallback_ids = [
+            item_id for item_id in ids
+            if item_id not in do_not_page_fallback
+            and (item_id not in result or result[item_id].expected_bytes <= 0)
+        ]
         for item_id in fallback_ids:
             page_item = self.fetch_page(item_id)
             if page_item is None:
