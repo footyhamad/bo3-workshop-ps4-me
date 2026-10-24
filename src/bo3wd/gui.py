@@ -133,6 +133,94 @@ class DownloaderApp(tk.Tk):
             kwargs["width"] = width
         return tk.Button(parent, **kwargs)
 
+    def _text_context_action(self, widget: tk.Widget, action: str) -> None:
+        """Run the platform's normal text-edit action for an input widget."""
+        if action == "select_all":
+            if hasattr(widget, "tag_add"):
+                widget.tag_add("sel", "1.0", "end-1c")  # type: ignore[attr-defined]
+                widget.mark_set("insert", "end-1c")  # type: ignore[attr-defined]
+            else:
+                widget.selection_range(0, tk.END)  # type: ignore[attr-defined]
+                widget.icursor(tk.END)  # type: ignore[attr-defined]
+            return
+        virtual_event = {"cut": "<<Cut>>", "copy": "<<Copy>>", "paste": "<<Paste>>"}.get(action)
+        if virtual_event:
+            widget.event_generate(virtual_event)
+
+    def _attach_text_context_menu(self, widget: tk.Widget) -> None:
+        """Add a selection-aware right-click menu to text entry and log widgets."""
+        menu = tk.Menu(widget, tearoff=0)
+        for label, action in (("Cut", "cut"), ("Copy", "copy"), ("Paste", "paste")):
+            menu.add_command(
+                label=label,
+                command=lambda selected_action=action: self._text_context_action(widget, selected_action),
+            )
+        menu.add_separator()
+        menu.add_command(
+            label="Select All",
+            command=lambda: self._text_context_action(widget, "select_all"),
+        )
+
+        def show_menu(event: tk.Event) -> str:
+            try:
+                widget.focus_set()
+                is_text_widget = hasattr(widget, "tag_ranges")
+                try:
+                    if is_text_widget:
+                        clicked_index = widget.index(f"@{event.x},{event.y}")  # type: ignore[attr-defined]
+                        selection = widget.tag_ranges("sel")  # type: ignore[attr-defined]
+                        inside_selection = (
+                            len(selection) >= 2
+                            and widget.compare(clicked_index, ">=", selection[0])  # type: ignore[attr-defined]
+                            and widget.compare(clicked_index, "<=", selection[1])  # type: ignore[attr-defined]
+                        )
+                        if not inside_selection:
+                            widget.mark_set("insert", clicked_index)  # type: ignore[attr-defined]
+                    elif not widget.selection_present():  # type: ignore[attr-defined]
+                        widget.icursor(widget.index(f"@{event.x}"))  # type: ignore[attr-defined]
+                except (tk.TclError, AttributeError, TypeError, ValueError):
+                    # Some fake widgets and read-only widgets don't expose caret helpers.
+                    pass
+
+                has_selection = (
+                    bool(widget.tag_ranges("sel"))  # type: ignore[attr-defined]
+                    if is_text_widget
+                    else bool(widget.selection_present())  # type: ignore[attr-defined]
+                )
+                try:
+                    state = str(widget.cget("state")).lower()
+                except (tk.TclError, AttributeError):
+                    state = "normal"
+                editable = state not in {"disabled", "readonly"}
+                try:
+                    clipboard_has_text = bool(widget.clipboard_get())
+                except (tk.TclError, AttributeError):
+                    clipboard_has_text = False
+                try:
+                    field_has_text = bool(
+                        widget.get("1.0", "end-1c") if is_text_widget else widget.get()  # type: ignore[attr-defined]
+                    )
+                except (tk.TclError, AttributeError, TypeError):
+                    field_has_text = False
+
+                menu.entryconfigure("Cut", state="normal" if editable and has_selection else "disabled")
+                menu.entryconfigure("Copy", state="normal" if has_selection else "disabled")
+                menu.entryconfigure("Paste", state="normal" if editable and clipboard_has_text else "disabled")
+                menu.entryconfigure("Select All", state="normal" if field_has_text else "disabled")
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                try:
+                    menu.grab_release()
+                except tk.TclError:
+                    pass
+            return "break"
+
+        # Button-3 is right-click on Windows/Linux; Aqua uses Button-2 for right-click.
+        widget.bind("<Button-3>", show_menu, add="+")
+        if sys.platform == "darwin":
+            widget.bind("<Button-2>", show_menu, add="+")
+            widget.bind("<Control-Button-1>", show_menu, add="+")
+
     def _entry(self, parent: tk.Widget, variable: tk.StringVar, *, width: int | None = None, show: str | None = None) -> tk.Entry:
         kwargs: dict[str, object] = {"textvariable": variable, "bg": "#20242d", "fg": "#f2f4f8", "insertbackground": "#ffffff",
             "relief": "flat", "highlightthickness": 1, "highlightbackground": "#363d49", "highlightcolor": "#3a82d2",
@@ -141,7 +229,9 @@ class DownloaderApp(tk.Tk):
             kwargs["width"] = width
         if show is not None:
             kwargs["show"] = show
-        return tk.Entry(parent, **kwargs)
+        entry = tk.Entry(parent, **kwargs)
+        self._attach_text_context_menu(entry)
+        return entry
 
     def _build_ui(self) -> None:
         outer = tk.Frame(self, bg="#111318")
@@ -376,6 +466,7 @@ class DownloaderApp(tk.Tk):
             wrap="word", state="disabled",
         )
         self.log_view.pack(fill="x")
+        self._attach_text_context_menu(self.log_view)
     
     def _check_for_updates(self) -> None:
         """Check the stable GitHub Releases channel without blocking the Tk event loop."""
