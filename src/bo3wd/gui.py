@@ -29,6 +29,10 @@ from .preflight import assess_disk_space
 from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
+from .steamclient import (
+    SteamClientImportResult, SteamClientItemNotFound, import_steam_client_item,
+    steam_client_workshop_uri,
+)
 from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_update_prompt
 
 
@@ -55,6 +59,7 @@ class DownloaderApp(tk.Tk):
         self.stop_event = threading.Event()
         self.running = False
         self.update_in_progress = False
+        self.steam_import_in_progress = False
         self.current_id: str | None = None
         self.last_log_path = ""
         self.queue_rows: dict[str, dict[str, object]] = {}
@@ -449,6 +454,12 @@ class DownloaderApp(tk.Tk):
         self.partial_cleanup_button.grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=(2, 5)
         )
+        self.steam_import_button = self._button(
+            utility_actions, "Import Steam Client Copy", self._import_from_steam_client,
+        )
+        self.steam_import_button.grid(
+            row=1, column=2, columnspan=2, sticky="ew", padx=4, pady=(2, 5)
+        )
 
         queue_tools = tk.Frame(outer, bg="#111318")
         queue_tools.pack(fill="x", pady=(8, 5))
@@ -525,10 +536,10 @@ class DownloaderApp(tk.Tk):
     
     def _check_for_updates(self) -> None:
         """Check the stable GitHub Releases channel without blocking the Tk event loop."""
-        if self.running:
+        if self.running or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
-                "Download in progress",
-                "Stop or finish the active Workshop queue before updating the application.",
+                "Download or import in progress",
+                "Finish the active Workshop download/import before updating the application.",
             )
             return
         self.update_button.configure(state="disabled")
@@ -889,7 +900,7 @@ class DownloaderApp(tk.Tk):
 
     def _check_file_integrity(self) -> None:
         """Run SteamCMD's native validation against already-installed Workshop items."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Downloader busy",
                 "Finish or pause the current operation before starting an integrity check or partial cleanup.",
@@ -1094,7 +1105,7 @@ class DownloaderApp(tk.Tk):
         return True
 
     def _start_queue(self) -> None:
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             return
         try:
             if not self._save_settings():
@@ -1236,7 +1247,7 @@ class DownloaderApp(tk.Tk):
 
     def _delete_old_partial_data(self) -> None:
         """Offer a preview before removing stale folders from SteamCMD's partial cache."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Downloader busy",
                 "Pause the download/repair operation before cleaning partial-download data.",
@@ -1390,6 +1401,9 @@ class DownloaderApp(tk.Tk):
         messagebox.showerror("Partial cleanup failed", error)
 
     def _recover_partial_downloads(self) -> None:
+        if getattr(self, "steam_import_in_progress", False):
+            messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
+            return
         if getattr(self, "partial_cleanup_in_progress", False):
             messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before recovering partials.")
             return
@@ -1447,7 +1461,198 @@ class DownloaderApp(tk.Tk):
         ):
             self._start_queue()
 
+    def _import_from_steam_client(self) -> None:
+        """Import a selected item only if a local Steam Client copy already exists."""
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
+            messagebox.showwarning(
+                "Downloader busy",
+                "Finish the current download, update, cleanup, or import before importing Steam Client files.",
+            )
+            return
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select a Workshop item",
+                "Select the failed or desired Workshop ID in the queue first, then click Import Steam Client Copy.",
+            )
+            return
+        steamcmd = Path(self.steamcmd_var.get().strip()).expanduser()
+        if not steamcmd.is_file():
+            messagebox.showerror(
+                "SteamCMD required",
+                "Choose the actual steamcmd.exe under SteamCMD Setup to identify the destination folder.",
+            )
+            return
+        item_id = str(selected[0])
+        try:
+            paths = DownloadPaths.from_steamcmd(steamcmd, self.data_dir)
+        except (OSError, ValueError, RuntimeError) as exc:
+            messagebox.showerror("Import unavailable", str(exc))
+            return
+        approved = messagebox.askyesno(
+            "Import Steam Client files",
+            f"Search installed Steam libraries for Workshop item {item_id} and copy any local files "
+            "into SteamCMD's content folder?\n\n"
+            "This does not trigger a download or bypass Steam restrictions. It imports only a copy "
+            "already stored on this PC. Existing files are never overwritten; conflicting files are skipped.",
+        )
+        if not approved:
+            return
+        self.steam_import_in_progress = True
+        self._set_steam_import_controls(True)
+        self.status_var.set(f"Searching Steam Client libraries for {item_id}… existing files will be preserved")
+        self._launch_steam_client_import(item_id, paths.content_root, None)
+
+    def _launch_steam_client_import(
+        self,
+        item_id: str,
+        content_root: Path,
+        extra_library_roots: list[Path] | None,
+    ) -> None:
+        self.worker = threading.Thread(
+            target=self._run_steam_client_import,
+            args=(item_id, content_root, extra_library_roots),
+            daemon=True,
+            name="bo3wd-steam-client-import",
+        )
+        self.worker.start()
+
+    def _run_steam_client_import(
+        self,
+        item_id: str,
+        content_root: Path,
+        extra_library_roots: list[Path] | None,
+    ) -> None:
+        last_reported = [0.0]
+        def report_progress(byte_count: int) -> None:
+            now = time.monotonic()
+            if now - last_reported[0] >= 0.4:
+                last_reported[0] = now
+                self.events.put(("steam_import_progress", (item_id, byte_count)))
+
+        try:
+            kwargs = {} if extra_library_roots is None else {"extra_library_roots": extra_library_roots}
+            result = import_steam_client_item(
+                item_id, content_root, on_progress=report_progress, **kwargs
+            )
+        except SteamClientItemNotFound as exc:
+            self.events.put(("steam_import_not_found", (item_id, content_root, exc, extra_library_roots is None)))
+        except Exception as exc:
+            self.events.put(("steam_import_failed", f"{type(exc).__name__}: {exc}"))
+        else:
+            self.events.put(("steam_import_done", result))
+
+    def _set_steam_import_controls(self, importing: bool) -> None:
+        state = "disabled" if importing else "normal"
+        for widget in (
+            self.start_button,
+            self.resume_selected_button,
+            self.resume_old_button,
+            self.integrity_button,
+            self.partial_cleanup_button,
+            self.steam_import_button,
+        ):
+            widget.configure(state=state)
+
+    def _finish_steam_client_import(self) -> None:
+        self.steam_import_in_progress = False
+        self._set_steam_import_controls(False)
+
+    def _handle_steam_client_item_not_found(self, payload: object) -> None:
+        try:
+            item_id, content_root, error, can_browse = payload
+        except (TypeError, ValueError):
+            self._finish_steam_client_import()
+            self.status_var.set("Steam Client import failed: no local copy was found.")
+            return
+        if can_browse:
+            choose = messagebox.askyesno(
+                "No local Steam Client copy found",
+                f"{error}\n\nIf Steam is installed in a custom location, choose its library folder to scan. "
+                "Select the folder that contains a steamapps directory.\n\n"
+                "This still only imports files already present on this PC.",
+            )
+            if choose:
+                selected_root = filedialog.askdirectory(
+                    title="Choose Steam library folder (must contain steamapps)",
+                    mustexist=True,
+                )
+                if selected_root:
+                    self.status_var.set(f"Scanning selected Steam library for {item_id}…")
+                    self._launch_steam_client_import(item_id, content_root, [Path(selected_root)])
+                    return
+        self._finish_steam_client_import()
+        open_steam = messagebox.askyesno(
+            "No local Steam Client copy found",
+            f"No installed Steam Client copy of Workshop item {item_id} was found.\n\n"
+            "Open this item's page in the official Steam Client now? If Steam offers Subscribe, "
+            "let its download finish, then select this ID and click Import Steam Client Copy again.\n\n"
+            "This cannot restore files Steam no longer provides or override an incompatibility/removal notice.",
+        )
+        if open_steam:
+            try:
+                opened = webbrowser.open(steam_client_workshop_uri(item_id), new=1)
+            except Exception as exc:
+                opened = False
+                open_error = str(exc)
+            else:
+                open_error = "No Steam protocol handler opened the page."
+            if opened:
+                self.status_var.set(
+                    f"Steam Client page opened for {item_id} · subscribe if available, then import the completed local copy"
+                )
+                messagebox.showinfo(
+                    "Steam Client fallback",
+                    "The Workshop page was opened through Steam's official protocol. "
+                    "If Steam allows a download, wait for it to finish, then select the same ID and click "
+                    "Import Steam Client Copy. Existing SteamCMD files will not be overwritten.",
+                )
+            else:
+                self.status_var.set(f"Could not open Steam Client page for {item_id}")
+                messagebox.showwarning(
+                    "Could not open Steam Client",
+                    f"{open_error}\n\nOpen this Workshop URL manually in Steam:\n"
+                    f"https://steamcommunity.com/sharedfiles/filedetails/?id={item_id}",
+                )
+            return
+        self.status_var.set(f"Steam Client copy not found for {item_id} · no files changed")
+        messagebox.showwarning(
+            "No Steam Client copy found",
+            f"{error}\n\nNo destination files were changed.",
+        )
+
+    def _handle_steam_client_import_done(self, result: SteamClientImportResult) -> None:
+        self._finish_steam_client_import()
+        self._load_history()
+        copied_mib = result.bytes_copied / (1024 * 1024)
+        detail = (
+            f"Workshop item: {result.workshop_id}\n"
+            f"Files copied: {result.files_copied} ({copied_mib:.2f} MiB)\n"
+            f"Identical files already present: {result.files_already_present}\n"
+            f"Conflicting files skipped: {len(result.conflicting_files)}\n\n"
+            f"Source: {result.source}\nDestination: {result.destination}\n\n"
+            "No existing file was overwritten. This import does not mark the SteamCMD download as verified."
+        )
+        if result.conflicting_files:
+            sample = "\n".join(result.conflicting_files[:12])
+            remainder = len(result.conflicting_files) - min(12, len(result.conflicting_files))
+            detail += f"\n\nConflicts (first 12):\n{sample}"
+            if remainder:
+                detail += f"\n… and {remainder} more"
+            self.status_var.set(
+                f"Steam Client import finished · copied {result.files_copied} · skipped {len(result.conflicting_files)} conflicts"
+            )
+            messagebox.showwarning("Steam Client import finished with conflicts", detail)
+        else:
+            self.status_var.set(
+                f"Steam Client import finished · copied {result.files_copied} file(s) · SteamCMD status unchanged"
+            )
+            messagebox.showinfo("Steam Client import finished", detail)
+
     def _resume_selected(self) -> None:
+        if getattr(self, "steam_import_in_progress", False):
+            messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
+            return
         if getattr(self, "partial_cleanup_in_progress", False):
             messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before resuming jobs.")
             return
@@ -1477,7 +1682,7 @@ class DownloaderApp(tk.Tk):
         if getattr(self, "partial_cleanup_in_progress", False):
             messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before resuming jobs.")
             return
-        if self.running or self.update_in_progress:
+        if self.running or self.update_in_progress or self.steam_import_in_progress:
             return
         count = self.history.requeue_retryable()
         self._load_history()
@@ -1494,6 +1699,9 @@ class DownloaderApp(tk.Tk):
         self._start_queue()
 
     def _retry_selected(self) -> None:
+        if getattr(self, "steam_import_in_progress", False):
+            messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
+            return
         if getattr(self, "partial_cleanup_in_progress", False):
             messagebox.showwarning("Partial cleanup in progress", "Finish partial-cache cleanup before requeuing jobs.")
             return
@@ -1656,6 +1864,17 @@ class DownloaderApp(tk.Tk):
                         self._upsert_row(row)
                 elif event[0] == "message":
                     self.status_var.set(str(event[1]))
+                elif event[0] == "steam_import_progress":
+                    item_id, byte_count = event[1]
+                    self.status_var.set(f"Importing {item_id} from Steam Client · {int(byte_count) / (1024 * 1024):.1f} MiB copied")
+                elif event[0] == "steam_import_not_found":
+                    self._handle_steam_client_item_not_found(event[1])
+                elif event[0] == "steam_import_failed":
+                    self._finish_steam_client_import()
+                    self.status_var.set("Steam Client import failed · existing files were preserved")
+                    messagebox.showerror("Steam Client import failed", str(event[1]))
+                elif event[0] == "steam_import_done":
+                    self._handle_steam_client_import_done(event[1])  # type: ignore[arg-type]
                 elif event[0] == "partial_scan_complete":
                     self._handle_partial_scan_complete(event[1])
                 elif event[0] == "partial_cleanup_done":
@@ -1739,6 +1958,12 @@ class DownloaderApp(tk.Tk):
         self.after(120, self._poll_events)
 
     def _close(self) -> None:
+        if getattr(self, "steam_import_in_progress", False):
+            messagebox.showinfo(
+                "Steam Client import in progress",
+                "Wait for the local file import to finish before closing. Final files are copied atomically.",
+            )
+            return
         if self.partial_cleanup_in_progress:
             messagebox.showinfo(
                 "Partial cleanup in progress",
