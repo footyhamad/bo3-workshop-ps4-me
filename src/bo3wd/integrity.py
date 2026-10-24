@@ -144,3 +144,41 @@ def write_integrity_report(
             pass
         raise
     return report_path
+
+
+def list_integrity_reports(data_dir: Path) -> list[Path]:
+    """Return newest-first report files from the application's report directory."""
+    report_dir = (Path(data_dir) / "integrity-reports").resolve(strict=False)
+    try:
+        candidates = [
+            path for path in report_dir.glob("integrity-check-*.json")
+            if path.is_file() and not path.is_symlink()
+            and path.resolve(strict=False).parent == report_dir
+        ]
+        return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+    except OSError as exc:
+        raise IntegrityCheckError(f"Cannot list integrity reports in {report_dir}: {exc}") from exc
+
+
+def load_integrity_report(report_path: Path, data_dir: Path) -> dict[str, Any]:
+    """Read a report only when it is a regular JSON file inside the report directory."""
+    report_dir = (Path(data_dir) / "integrity-reports").resolve(strict=False)
+    candidate = Path(report_path)
+    try:
+        resolved = candidate.resolve(strict=True)
+        if (
+            candidate.is_symlink()
+            or resolved.parent != report_dir
+            or resolved.suffix.lower() != ".json"
+            or not resolved.name.startswith("integrity-check-")
+            or not resolved.is_file()
+        ):
+            raise IntegrityCheckError("The selected integrity report is not in the application's report directory.")
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except IntegrityCheckError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise IntegrityCheckError(f"Cannot read integrity report {candidate.name}: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise IntegrityCheckError(f"Integrity report {candidate.name} has an unsupported format.")
+    return payload
