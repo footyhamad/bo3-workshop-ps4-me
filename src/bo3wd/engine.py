@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -43,19 +44,29 @@ class DownloadCancelled(RuntimeError):
 
 
 def tree_size(root: Path) -> int:
-    """Sum file sizes under a directory while tolerating concurrent file updates."""
+    """Sum regular-file sizes with scandir to keep live progress scans lightweight."""
     total = 0
     try:
         if not root.is_dir():
             return 0
-        for path in root.rglob("*"):
+        pending = [root]
+        while pending:
+            current = pending.pop()
             try:
-                if path.is_file():
-                    total += path.stat().st_size
+                entries = os.scandir(current)
             except OSError:
                 continue
+            with entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += max(0, int(entry.stat(follow_symlinks=False).st_size))
+                    except OSError:
+                        continue
     except OSError:
-        return total
+        pass
     return total
 
 
@@ -204,9 +215,8 @@ class DownloadEngine:
                 nonlocal current_speed, current_eta, current_sample_bytes, current_sample_at, last_line_byte_count
                 now = time.monotonic()
                 elapsed_sample = now - current_sample_at
-                # Recursive tree scans can be expensive, but a long interval makes small/medium
-                # downloads appear frozen. Sample at the ProcessRunner tick cadence (~0.75s).
-                if elapsed_sample < 0.70:
+                # Sample fast enough for KB-level progress; scandir-based tree_size keeps it cheap.
+                if elapsed_sample < 0.35:
                     return
                 observed_bytes = self._current_bytes(item_id)
                 delta_bytes = max(0, observed_bytes - current_sample_bytes)
@@ -227,7 +237,7 @@ class DownloadEngine:
                 nonlocal last_ui_telemetry_at
                 update_progress_sample()
                 now = time.monotonic()
-                if self.event_sink is not None and now - last_ui_telemetry_at >= 0.75:
+                if self.event_sink is not None and now - last_ui_telemetry_at >= 0.35:
                     last_ui_telemetry_at = now
                     telemetry = self._event(
                         item, JobStatus.DOWNLOADING, attempt=attempt, message="Transfer telemetry",  # noqa: B023
