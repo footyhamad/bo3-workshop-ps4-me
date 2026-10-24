@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.8 — resilient size lookup and integrated queue tools
+
+- Added Workshop webpage size parsing when Steam metadata reports no size or omits an item.
+- Made unknown-size downloads explicitly non-blocking; byte progress and SteamCMD completion checks continue when percentage/ETA are unavailable.
+- Added queue search/status filters, persistent queued-job reordering, an in-app integrity report viewer, and advisory disk-space preflight.
+- Migrated existing SQLite history to persisted queue positions without deleting queue/history records or download files.
+- Added regression tests for webpage fallback, queue-order migration, filters, disk preflight, and report reading.
+
+
 ## 2.0.7 — right-click text editing menu
 
 - Added Cut, Copy, Paste, and Select All context actions to all editable text fields via the shared entry-field helper.
