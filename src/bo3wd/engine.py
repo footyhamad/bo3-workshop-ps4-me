@@ -32,7 +32,7 @@ _PERMANENT = re.compile(
     re.IGNORECASE,
 )
 _TRANSIENT = re.compile(
-    r"timeout|timed out|connection (?:reset|closed|refused|lost)|network|"
+    r"timeout|timed out|no connection|connection (?:reset|closed|refused|lost|failure)|network|"
     r"failed to connect|failed to download|error downloading|server unavailable|"
     r"temporarily unavailable|rate.?limit|http\s*5\d\d|content server",
     re.IGNORECASE,
