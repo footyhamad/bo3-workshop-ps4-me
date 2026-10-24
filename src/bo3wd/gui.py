@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -17,9 +18,14 @@ from tkinter import filedialog, messagebox, ttk
 from . import APP_NAME, __version__
 from .engine import DownloadEngine
 from .identifiers import parse_workshop_list
-from .integrity import IntegrityCheckError, discover_integrity_targets, write_integrity_report
+from .integrity import (
+    IntegrityCheckError, discover_integrity_targets, list_integrity_reports,
+    load_integrity_report, write_integrity_report,
+)
 from .metadata import MetadataError, WorkshopMetadataClient
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
+from .preflight import assess_disk_space
+from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
 from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_self_update
@@ -50,6 +56,7 @@ class DownloaderApp(tk.Tk):
         self.update_in_progress = False
         self.current_id: str | None = None
         self.last_log_path = ""
+        self.queue_rows: dict[str, dict[str, object]] = {}
 
         steamcmd = self.settings.get("steamcmd") or ""
         if not steamcmd:
@@ -67,6 +74,8 @@ class DownloaderApp(tk.Tk):
         self.progress_text_var = tk.StringVar(value="Ready · downloaded bytes and integrity-check progress appear here")
         self.progress_is_indeterminate = False
         self.item_entry_var = tk.StringVar()
+        self.queue_search_var = tk.StringVar(value="")
+        self.queue_status_filter_var = tk.StringVar(value="All statuses")
         self.summary_vars = {
             "queued": tk.StringVar(value="0"),
             "active": tk.StringVar(value="0"),
@@ -401,7 +410,7 @@ class DownloaderApp(tk.Tk):
 
         utility_actions = tk.Frame(controls, bg="#111318")
         utility_actions.pack(fill="x", padx=5, pady=(0, 5))
-        for column in range(5):
+        for column in range(6):
             utility_actions.columnconfigure(column, weight=1, uniform="utility-actions")
         self._button(utility_actions, "Recover Partial Files", self._recover_partial_downloads).grid(
             row=0, column=0, sticky="ew", padx=4, pady=4
@@ -417,6 +426,32 @@ class DownloaderApp(tk.Tk):
         )
         self._button(utility_actions, "Open Logs", self._open_logs).grid(
             row=0, column=4, sticky="ew", padx=4, pady=4
+        )
+        self._button(utility_actions, "Integrity Reports", self._view_integrity_reports).grid(
+            row=0, column=5, sticky="ew", padx=4, pady=4
+        )
+
+        queue_tools = tk.Frame(outer, bg="#111318")
+        queue_tools.pack(fill="x", pady=(8, 5))
+        queue_tools.columnconfigure(1, weight=1)
+        self._label(queue_tools, "Search queue").grid(row=0, column=0, padx=(0, 7), sticky="w")
+        self.queue_search_entry = self._entry(queue_tools, self.queue_search_var)
+        self.queue_search_entry.grid(row=0, column=1, padx=(0, 12), sticky="ew", ipady=4)
+        self._label(queue_tools, "Status").grid(row=0, column=2, padx=(0, 6), sticky="e")
+        self.queue_status_combo = ttk.Combobox(
+            queue_tools, textvariable=self.queue_status_filter_var, values=STATUS_FILTERS,
+            state="readonly", width=17,
+        )
+        self.queue_status_combo.grid(row=0, column=3, padx=(0, 10), sticky="ew")
+        self.queue_status_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_queue_view())
+        self._button(queue_tools, "Clear Search", self._clear_queue_search).grid(
+            row=0, column=4, padx=(0, 8)
+        )
+        self._button(queue_tools, "Move Up", lambda: self._move_selected_queue_item(-1)).grid(
+            row=0, column=5, padx=(0, 6)
+        )
+        self._button(queue_tools, "Move Down", lambda: self._move_selected_queue_item(1)).grid(
+            row=0, column=6
         )
 
         table_frame = tk.Frame(outer, bg="#111318")
@@ -449,6 +484,7 @@ class DownloaderApp(tk.Tk):
         self.table.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
+        self.queue_search_var.trace_add("write", lambda *_args: self._refresh_queue_view())
 
         self.status_label = tk.Label(
             outer, textvariable=self.status_var, bg="#111318", fg="#a9b7ca",
@@ -635,7 +671,11 @@ class DownloaderApp(tk.Tk):
             self.history.ensure_item(meta, self.data_dir / "logs" / f"{item_id}.log")
             self.events.put(("refresh", item_id))
         if errors:
-            self.events.put(("message", "Steam metadata unavailable; IDs remain queued and downloadable."))
+            self.events.put((
+                "message",
+                "Size/title metadata could not be fetched for every item. Jobs remain queued and "
+                "will still be attempted; unknown sizes only limit the progress estimate."
+            ))
 
     def _import_list(self) -> None:
         chosen = filedialog.askopenfilename(title="Import Workshop ID list", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
@@ -651,8 +691,13 @@ class DownloaderApp(tk.Tk):
         self._add_items()
 
     def _load_history(self) -> None:
-        for row in reversed(self.history.list_jobs()):
-            self._upsert_row(row)
+        rows = self.history.list_jobs(limit=5000)
+        self.queue_rows = {
+            str(row["workshop_id"]): dict(row)
+            for row in rows
+            if row.get("workshop_id")
+        }
+        self._refresh_queue_view()
 
     @staticmethod
     def _format_bytes(byte_count: int | float) -> str:
@@ -743,7 +788,7 @@ class DownloaderApp(tk.Tk):
         if isinstance(row, DownloadEvent):
             item_id = row.workshop_id
             stored = self.history.get(item_id) or {}
-            data = {
+            data: dict[str, object] = {
                 "workshop_id": item_id,
                 "title": stored.get("title") or row.metadata.get("title") or item_id,
                 "status": row.status.value,
@@ -752,10 +797,24 @@ class DownloaderApp(tk.Tk):
                 "bytes_received": row.bytes_received,
                 "expected_bytes": row.expected_bytes or stored.get("expected_bytes") or 0,
                 "message": row.message,
+                "queue_position": stored.get("queue_position", 0),
+                "updated_at": stored.get("updated_at", 0),
+                "speed_bytes_per_second": row.speed_bytes_per_second,
             }
         else:
-            data = row
+            data = dict(row)
             item_id = str(data.get("workshop_id", ""))
+        if not item_id:
+            return
+        self.queue_rows[item_id] = dict(data)
+        self._refresh_queue_view()
+        if isinstance(row, DownloadEvent) and row.line:
+            self._append_log(f"[{item_id} · try {row.attempt}] {row.line}")
+        elif isinstance(row, DownloadEvent) and row.message:
+            self._append_log(f"[{item_id}] {row.message}")
+
+    def _render_queue_row(self, data: dict[str, object]) -> None:
+        item_id = str(data.get("workshop_id", ""))
         if not item_id:
             return
         status = str(data.get("status", "queued"))
@@ -773,35 +832,61 @@ class DownloaderApp(tk.Tk):
             if expected_bytes
             else f"{self._format_bytes(bytes_received)} received"
         )
-        if isinstance(row, DownloadEvent) and row.speed_bytes_per_second > 0:
-            received += f" · {self._format_bytes(row.speed_bytes_per_second)}/s"
-        title = str(data.get("title") or item_id).replace("\n", " ")[:85]
+        try:
+            speed = max(0.0, float(data.get("speed_bytes_per_second", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            speed = 0.0
+        if speed > 0:
+            received += f" · {self._format_bytes(speed)}/s"
+        title = str(data.get("title") or item_id).replace("\\n", " ")[:85]
         values = (
             item_id, title, status.replace("_", " ").title(),
             f"{attempt}/{max_attempts or '—'}", progress, received,
         )
-        previous_status = None
         if self.table.exists(item_id):
-            old_values = self.table.item(item_id, "values")
-            if len(old_values) > 2:
-                previous_status = str(old_values[2]).lower().replace(" ", "_")
             self.table.item(item_id, values=values, tags=(status,))
         else:
             self.table.insert("", "end", iid=item_id, values=values, tags=(status,))
-        if previous_status != status:
-            self._refresh_queue_summary()
-        if isinstance(row, DownloadEvent) and row.line:
-            self._append_log(f"[{item_id} · try {row.attempt}] {row.line}")
-        elif isinstance(row, DownloadEvent) and row.message:
-            self._append_log(f"[{item_id}] {row.message}")
+
+    def _refresh_queue_view(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        query = self.queue_search_var.get() if hasattr(self, "queue_search_var") else ""
+        status_filter = (
+            self.queue_status_filter_var.get()
+            if hasattr(self, "queue_status_filter_var") else "All statuses"
+        )
+        visible_rows = [
+            row for row in self.queue_rows.values()
+            if matches_queue_row(row, query, status_filter)
+        ]
+        visible_ids = {str(row["workshop_id"]) for row in visible_rows}
+        for item_id in list(self.table.get_children("")):
+            if item_id not in visible_ids:
+                self.table.delete(item_id)
+        for row in visible_rows:
+            self._render_queue_row(row)
+        for index, row in enumerate(visible_rows):
+            self.table.move(str(row["workshop_id"]), "", index)
+        self._refresh_queue_summary()
+
+    def _clear_queue_search(self) -> None:
+        self.queue_search_var.set("")
+        self.queue_status_filter_var.set("All statuses")
+        self._refresh_queue_view()
 
     def _refresh_queue_summary(self) -> None:
         counts = {"queued": 0, "active": 0, "completed": 0, "attention": 0}
-        for iid in self.table.get_children(""):
-            values = self.table.item(iid, "values")
-            if len(values) < 3:
-                continue
-            status = str(values[2]).lower().replace(" ", "_")
+        if hasattr(self, "queue_rows"):
+            rows = list(self.queue_rows.values())
+            statuses = [str(row.get("status", "queued")).lower().replace(" ", "_") for row in rows]
+        else:
+            statuses = [
+                str(self.table.item(iid, "values")[2]).lower().replace(" ", "_")
+                for iid in self.table.get_children("")
+                if len(self.table.item(iid, "values")) >= 3
+            ]
+        for status in statuses:
             if status == JobStatus.QUEUED.value:
                 counts["queued"] += 1
             elif status in {
@@ -843,6 +928,11 @@ class DownloaderApp(tk.Tk):
             self.status_var.set(f"Integrity check not started: {exc}")
             return
 
+        if not self._confirm_disk_space(
+            targets, Path(str(self.settings["steamcmd"])), operation="integrity validation/repair",
+        ):
+            self.status_var.set("Integrity check cancelled by disk-space preflight.")
+            return
         if selected_id:
             scope = f"selected Workshop item {selected_id}"
         else:
@@ -973,6 +1063,49 @@ class DownloaderApp(tk.Tk):
             },
         ))
 
+    def _confirm_disk_space(
+        self,
+        items: list[dict[str, object]] | list[WorkshopItem],
+        steamcmd_path: Path,
+        *,
+        operation: str,
+    ) -> bool:
+        """Warn about known size shortages while allowing unknown-size downloads to proceed."""
+        assessment = assess_disk_space(steamcmd_path, items)
+        if assessment.available_bytes is None:
+            self.status_var.set(f"Disk-space preflight could not read the target drive: {assessment.error}")
+            return messagebox.askyesno(
+                "Disk-space check unavailable",
+                f"Could not estimate free space for {steamcmd_path.parent}.\n\n"
+                f"{assessment.error}\n\nTry the {operation} anyway?",
+            )
+        available_text = self._format_bytes(assessment.available_bytes)
+        required_text = self._format_bytes(assessment.expected_bytes)
+        margin_text = self._format_bytes(assessment.safety_margin_bytes)
+        unknown_note = (
+            f"\nSize unknown for {assessment.unknown_items} item(s); these items will still be attempted, "
+            "but their sizes are not included in the estimate."
+            if assessment.unknown_items else ""
+        )
+        if assessment.low_space:
+            prompt = (
+                f"Available on target drive: {available_text}\n"
+                f"Known Workshop size total: {required_text}\n"
+                f"Recommended free-space reserve: {margin_text}{unknown_note}\n\n"
+                f"Free space may be insufficient for this {operation}. Continue anyway?"
+            )
+            return messagebox.askyesno("Low disk space", prompt)
+        if assessment.unknown_items:
+            self.status_var.set(
+                f"Disk preflight · {available_text} free · size unknown for {assessment.unknown_items} item(s); "
+                "downloads are not blocked."
+            )
+        else:
+            self.status_var.set(
+                f"Disk preflight passed · {available_text} free · estimated known size {required_text}."
+            )
+        return True
+
     def _start_queue(self) -> None:
         if self.running or self.update_in_progress:
             return
@@ -988,6 +1121,11 @@ class DownloaderApp(tk.Tk):
                 )
                 return
             policy = self._policy()
+            if not self._confirm_disk_space(
+                pending, Path(str(self.settings["steamcmd"])), operation="download",
+            ):
+                self.status_var.set("Queue start cancelled by disk-space preflight. Existing files were not changed.")
+                return
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("Setup error", str(exc))
             self.status_var.set(f"Could not start queue: {exc}")
@@ -1066,6 +1204,29 @@ class DownloaderApp(tk.Tk):
         self.status_var.set("Stopping current SteamCMD attempt… partial files will be preserved")
         self.stop_button.configure(state="disabled")
 
+    def _move_selected_queue_item(self, direction: int) -> None:
+        if self.running or self.update_in_progress:
+            messagebox.showwarning("Queue busy", "Pause the current operation before reordering queued jobs.")
+            return
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo("Select a queued item", "Select a queued row to move it up or down.")
+            return
+        item_id = selected[0]
+        row = self.history.get(item_id)
+        if not row or row.get("status") != JobStatus.QUEUED.value:
+            messagebox.showwarning("Queued items only", "Only queued items can be reordered.")
+            return
+        if not self.history.move_queued(item_id, direction):
+            self.status_var.set("That item is already at the queue boundary.")
+            return
+        self._load_history()
+        if self.table.exists(item_id):
+            self.table.selection_set(item_id)
+            self.table.focus(item_id)
+            self.table.see(item_id)
+        self.status_var.set("Queue order saved. Partial and completed files were not changed.")
+
     def _remove_selected(self) -> None:
         selected = self.table.selection()
         if not selected:
@@ -1082,8 +1243,8 @@ class DownloaderApp(tk.Tk):
             messagebox.showwarning("Item is active", "This job is active or waiting to retry; stop it before removing its row.")
             return
         self.history.delete(item_id)
-        self.table.delete(item_id)
-        self._refresh_queue_summary()
+        self.queue_rows.pop(item_id, None)
+        self._refresh_queue_view()
         self.status_var.set(f"Removed {item_id} from the queue/history. Download files were not deleted.")
 
     def _recover_partial_downloads(self) -> None:
@@ -1196,12 +1357,78 @@ class DownloaderApp(tk.Tk):
 
     def _clear_finished(self) -> None:
         count = self.history.clear_finished()
-        for item_id in list(self.table.get_children()):
-            row = self.history.get(item_id)
-            if row is None:
-                self.table.delete(item_id)
-        self._refresh_queue_summary()
+        self._load_history()
         self.status_var.set(f"Cleared {count} finished history record(s). Downloaded/partial files were not deleted.")
+
+    def _view_integrity_reports(self) -> None:
+        """Open a local, read-only viewer for saved integrity reports."""
+        try:
+            reports = list_integrity_reports(self.data_dir)
+        except IntegrityCheckError as exc:
+            messagebox.showerror("Integrity reports unavailable", str(exc))
+            return
+        window = tk.Toplevel(self)
+        window.title("Workshop Integrity Reports")
+        window.geometry("1000x620")
+        window.minsize(760, 460)
+        window.configure(bg="#111318")
+        window.columnconfigure(1, weight=1)
+        window.rowconfigure(0, weight=1)
+
+        side = tk.Frame(window, bg="#171c25")
+        side.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        tk.Label(
+            side, text="SAVED REPORTS", bg="#171c25", fg="#91a0b5",
+            font=("Segoe UI", 9, "bold"), anchor="w",
+        ).pack(fill="x", padx=10, pady=(10, 6))
+        report_list = tk.Listbox(
+            side, width=32, bg="#20242d", fg="#edf3fb", selectbackground="#2f5e8e",
+            relief="flat", activestyle="dotbox", exportselection=False,
+        )
+        report_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        for report_path in reports:
+            report_list.insert("end", report_path.name)
+        self._button(side, "Open Reports Folder", lambda: self._open_path(self.data_dir / "integrity-reports")).pack(
+            fill="x", padx=8, pady=(0, 10),
+        )
+
+        detail_frame = tk.Frame(window, bg="#111318")
+        detail_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        detail_frame.rowconfigure(0, weight=1)
+        detail_frame.columnconfigure(0, weight=1)
+        detail = tk.Text(
+            detail_frame, bg="#0c0e12", fg="#dbe7f6", insertbackground="#ffffff",
+            relief="flat", wrap="word", font=("Consolas", 9), state="disabled",
+        )
+        detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=detail.yview)
+        detail.configure(yscrollcommand=detail_scroll.set)
+        detail.grid(row=0, column=0, sticky="nsew")
+        detail_scroll.grid(row=0, column=1, sticky="ns")
+        self._attach_text_context_menu(detail)
+
+        def show_report(_event: object | None = None) -> None:
+            selection = report_list.curselection()
+            if not selection:
+                return
+            report_path = reports[int(selection[0])]
+            try:
+                payload = load_integrity_report(report_path, self.data_dir)
+                content = json.dumps(payload, ensure_ascii=False, indent=2)
+            except (IntegrityCheckError, OSError, ValueError) as exc:
+                content = f"Could not read {report_path.name}:\n{exc}"
+            detail.configure(state="normal")
+            detail.delete("1.0", "end")
+            detail.insert("1.0", content)
+            detail.configure(state="disabled")
+
+        report_list.bind("<<ListboxSelect>>", show_report)
+        if reports:
+            report_list.selection_set(0)
+            show_report()
+        else:
+            detail.configure(state="normal")
+            detail.insert("1.0", "No integrity reports found yet. Run Check File Integrity first.")
+            detail.configure(state="disabled")
 
     def _open_logs(self) -> None:
         folder = self.data_dir / "logs"
