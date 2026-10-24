@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.9 — immediate downloads and prompted updates
+
+- Removed GUI-side Steam/API/Workshop size lookups from the queue-add path; new jobs are queued and started without waiting for a total-size result.
+- Changed progress and queue displays to show observed bytes and transfer rate only, without total-size denominators, percentages, or ETA.
+- Changed the updater to download and verify a versioned EXE, close the current app, then show a separate Windows prompt asking whether to open the new version; the currently installed EXE is not replaced.
+- Added regression tests for size-independent progress and the post-exit update prompt.
+
 ## 2.0.8 — resilient size lookup and integrated queue tools
 
 - Added Workshop webpage size parsing when Steam metadata reports no size or omits an item.
