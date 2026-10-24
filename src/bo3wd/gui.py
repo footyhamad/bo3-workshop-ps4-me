@@ -1095,7 +1095,7 @@ class DownloaderApp(tk.Tk):
         return True
 
     def _start_queue(self) -> None:
-        if self.running or self.update_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
             return
         try:
             if not self._save_settings():
@@ -1234,6 +1234,153 @@ class DownloaderApp(tk.Tk):
         self.queue_rows.pop(item_id, None)
         self._refresh_queue_view()
         self.status_var.set(f"Removed {item_id} from the queue/history. Download files were not deleted.")
+
+    def _delete_old_partial_data(self) -> None:
+        """Offer a preview before removing stale folders from SteamCMD's partial cache."""
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress:
+            messagebox.showwarning(
+                "Downloader busy",
+                "Pause the download/repair operation before cleaning partial-download data.",
+            )
+            return
+        steamcmd = Path(self.steamcmd_var.get().strip()).expanduser()
+        if not steamcmd.is_file():
+            messagebox.showerror(
+                "SteamCMD required",
+                "Select the actual steamcmd.exe in SteamCMD Setup first.",
+            )
+            return
+        partial_root = steamcmd.resolve().parent / "steamapps" / "workshop" / "downloads" / "311210"
+        protect_statuses = {
+            JobStatus.QUEUED.value, JobStatus.PREPARING.value,
+            JobStatus.DOWNLOADING.value, JobStatus.RETRY_WAIT.value,
+        }
+        protected_ids = {
+            str(row.get("workshop_id"))
+            for row in self.history.list_jobs(limit=5000)
+            if row.get("status") in protect_statuses and row.get("workshop_id")
+        }
+        if self.current_id:
+            protected_ids.add(self.current_id)
+
+        self.partial_cleanup_in_progress = True
+        self.partial_cleanup_button.configure(state="disabled")
+        self.status_var.set(
+            f"Scanning SteamCMD partial folders with no file changes for {DEFAULT_STALE_DAYS}+ days…"
+        )
+        threading.Thread(
+            target=self._scan_old_partial_data_worker,
+            args=(partial_root, protected_ids),
+            daemon=True,
+            name="bo3wd-partial-scan",
+        ).start()
+
+    def _scan_old_partial_data_worker(self, partial_root: Path, protected_ids: set[str]) -> None:
+        try:
+            folders = find_stale_partial_folders(
+                partial_root, older_than_days=DEFAULT_STALE_DAYS, protected_ids=protected_ids,
+            )
+        except Exception as exc:
+            self.events.put(("partial_cleanup_failed", f"Could not scan partial folders: {exc}"))
+            return
+        self.events.put((
+            "partial_scan_complete",
+            (str(partial_root), protected_ids, folders),
+        ))
+
+    def _handle_partial_scan_complete(self, payload: object) -> None:
+        self.partial_cleanup_in_progress = False
+        self.partial_cleanup_button.configure(state="normal")
+        try:
+            root_text, protected_ids, folders = payload
+            root = Path(root_text)
+            folders = list(folders)
+        except (TypeError, ValueError):
+            self.status_var.set("Partial cleanup scan returned invalid results.")
+            return
+        if not folders:
+            self.status_var.set("No stale partial folders found. Existing partial/content data was kept.")
+            messagebox.showinfo(
+                "Nothing to clean",
+                f"No inactive numeric Workshop folders with file activity older than "
+                f"{DEFAULT_STALE_DAYS} days were found in:\n{root}",
+            )
+            return
+        total_bytes = sum(folder.size_bytes for folder in folders)
+        preview = "\n".join(
+            f"{folder.workshop_id} — {folder.size_bytes // 1024:,} KB"
+            for folder in folders[:20]
+        )
+        if len(folders) > 20:
+            preview += f"\n… and {len(folders) - 20} more folder(s)"
+        confirmed = messagebox.askyesno(
+            "Delete old partial data?",
+            f"Found {len(folders)} inactive partial folder(s), totaling "
+            f"{self._format_bytes(total_bytes)}.\n\n"
+            f"No files in these folders have changed for at least {DEFAULT_STALE_DAYS} days.\n\n"
+            f"{preview}\n\n"
+            "Permanently delete these folders from SteamCMD's Workshop DOWNLOADS cache?\n"
+            "Only old numeric-ID partial folders are eligible. Queued jobs, newer partials, "
+            "and installed Workshop content under the separate content folder are preserved.",
+        )
+        if not confirmed:
+            self.status_var.set("Partial cleanup cancelled. No files were changed.")
+            return
+        self.partial_cleanup_in_progress = True
+        self.partial_cleanup_button.configure(state="disabled")
+        self.status_var.set("Rechecking selected folders and deleting stale partial data…")
+        threading.Thread(
+            target=self._cleanup_old_partial_data_worker,
+            args=(root, [folder.workshop_id for folder in folders], set(protected_ids)),
+            daemon=True,
+            name="bo3wd-partial-cleanup",
+        ).start()
+
+    def _cleanup_old_partial_data_worker(
+        self, partial_root: Path, workshop_ids: list[str], protected_ids: set[str],
+    ) -> None:
+        try:
+            deleted, errors = delete_old_partial_folders(
+                partial_root, workshop_ids, older_than_days=DEFAULT_STALE_DAYS,
+                protected_ids=protected_ids,
+            )
+        except Exception as exc:
+            self.events.put(("partial_cleanup_failed", f"Partial cleanup failed: {exc}"))
+            return
+        self.events.put(("partial_cleanup_done", (deleted, errors)))
+
+    def _handle_partial_cleanup_done(self, payload: object) -> None:
+        self.partial_cleanup_in_progress = False
+        self.partial_cleanup_button.configure(state="normal")
+        try:
+            deleted, errors = payload
+        except (TypeError, ValueError):
+            self.status_var.set("Partial cleanup returned invalid results.")
+            return
+        deleted = list(deleted)
+        errors = list(errors)
+        removed_bytes = sum(folder.size_bytes for folder in deleted)
+        self.status_var.set(
+            f"Removed {len(deleted)} stale partial folder(s) · {self._format_bytes(removed_bytes)} freed"
+        )
+        details = (
+            f"Removed folders: {len(deleted)}\n"
+            f"Estimated space freed: {self._format_bytes(removed_bytes)}\n"
+            "Installed Workshop content was not touched."
+        )
+        if errors:
+            details += "\n\nSkipped / errors:\n" + "\n".join(
+                f"{workshop_id}: {error}" for workshop_id, error in errors[:20]
+            )
+            messagebox.showwarning("Partial cleanup finished with skips", details)
+        else:
+            messagebox.showinfo("Partial cleanup complete", details)
+
+    def _handle_partial_cleanup_failed(self, error: str) -> None:
+        self.partial_cleanup_in_progress = False
+        self.partial_cleanup_button.configure(state="normal")
+        self.status_var.set("Could not clean partial data")
+        messagebox.showerror("Partial cleanup failed", error)
 
     def _recover_partial_downloads(self) -> None:
         """Rebuild queue rows from SteamCMD's on-disk partial Workshop directories."""
@@ -1490,6 +1637,12 @@ class DownloaderApp(tk.Tk):
                         self._upsert_row(row)
                 elif event[0] == "message":
                     self.status_var.set(str(event[1]))
+                elif event[0] == "partial_scan_complete":
+                    self._handle_partial_scan_complete(event[1])
+                elif event[0] == "partial_cleanup_done":
+                    self._handle_partial_cleanup_done(event[1])
+                elif event[0] == "partial_cleanup_failed":
+                    self._handle_partial_cleanup_failed(str(event[1]))
                 elif event[0] == "update_check_complete":
                     self._handle_update_check_complete(event[1])  # type: ignore[arg-type]
                 elif event[0] == "update_check_failed":
@@ -1567,6 +1720,12 @@ class DownloaderApp(tk.Tk):
         self.after(120, self._poll_events)
 
     def _close(self) -> None:
+        if self.partial_cleanup_in_progress:
+            messagebox.showinfo(
+                "Partial cleanup in progress",
+                "Wait for the current partial-cache scan or cleanup to finish before closing.",
+            )
+            return
         if self.update_in_progress:
             messagebox.showinfo(
                 "Update in progress",
