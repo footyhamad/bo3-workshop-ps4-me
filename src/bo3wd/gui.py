@@ -1388,7 +1388,7 @@ class DownloaderApp(tk.Tk):
         report_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         for report_path in reports:
             report_list.insert("end", report_path.name)
-        self._button(side, "Open Reports Folder", lambda: self._open_path(self.data_dir / "integrity-reports")).pack(
+        self._button(side, "Open Reports Folder", self._open_integrity_reports_folder).pack(
             fill="x", padx=8, pady=(0, 10),
         )
 
@@ -1429,6 +1429,11 @@ class DownloaderApp(tk.Tk):
             detail.configure(state="normal")
             detail.insert("1.0", "No integrity reports found yet. Run Check File Integrity first.")
             detail.configure(state="disabled")
+
+    def _open_integrity_reports_folder(self) -> None:
+        folder = self.data_dir / "integrity-reports"
+        folder.mkdir(parents=True, exist_ok=True)
+        self._open_path(folder)
 
     def _open_logs(self) -> None:
         folder = self.data_dir / "logs"
