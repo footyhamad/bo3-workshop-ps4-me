@@ -115,7 +115,7 @@ class ProcessRunner:
                 log.flush()
                 while True:
                     now = time.monotonic()
-                    if on_tick is not None and now - last_tick >= 0.75:
+                    if on_tick is not None and now - last_tick >= 0.25:
                         last_tick = now
                         try:
                             on_tick()
