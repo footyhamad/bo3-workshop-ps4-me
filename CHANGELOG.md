@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0 — explicit SteamCMD failure detection
+
+- Detects `ERROR! Download item <id> failed (<reason>)` even when SteamCMD exits with code 0.
+- Stops retrying non-transient item-level failures, preserves all partial files, and surfaces an actionable explanation in the UI.
+- Keeps explicit network/connection failures on the retry path.
+- Adds a regression test proving a generic `Failure` response does not spin through dozens of retries.
 ## 2.1.0 — live byte progress, network meter, and partial cleanup
 
 - Optimized filesystem byte counting with `os.scandir` and increased sampling frequency so whole-KB progress updates more often.
