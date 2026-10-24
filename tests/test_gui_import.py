@@ -31,7 +31,7 @@ def test_label_allows_custom_colors_without_duplicate_tk_options(monkeypatch):
     assert captured["bg"] == "#111318"
     assert captured["font"] == ("Segoe UI", 9)
 
-def test_download_progress_displays_data_and_percentage_without_creating_window():
+def test_download_progress_uses_live_bytes_without_size_reporting():
     pytest.importorskip("tkinter")
     from types import SimpleNamespace
 
@@ -81,11 +81,12 @@ def test_download_progress_displays_data_and_percentage_without_creating_window(
 
     DownloaderApp._update_download_progress(app, event)
 
-    assert bar.values["mode"] == "determinate"
-    assert bar.values["value"] == 25
-    assert "25.0%" in label.value
-    assert "1.0 MB / 4.0 MB" in label.value
+    assert bar.values["mode"] == "indeterminate"
+    assert bar.started is True
+    assert "1.0 MB downloaded" in label.value
     assert "500.0 KB/s" in label.value
+    assert "4.0 MB" not in label.value
+    assert "%" not in label.value
 
 
 def test_download_progress_shows_received_bytes_when_total_size_is_unknown():
