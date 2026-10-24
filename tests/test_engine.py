@@ -93,3 +93,43 @@ def test_live_telemetry_reports_partial_file_bytes_before_steamcmd_finishes(tmp_
     ]
     assert telemetry, "the UI needs periodic progress events even when SteamCMD prints no lines"
     assert telemetry[0].bytes_received >= len(b"partial download bytes")
+
+def test_explicit_steamcmd_failure_is_not_retried_just_because_exit_code_is_zero(tmp_path):
+    exe = tmp_path / "steamcmd.exe"
+    exe.write_bytes(b"test")
+    paths = DownloadPaths.from_steamcmd(exe, tmp_path / "appdata")
+
+    class FailureRunner:
+        def __init__(self):
+            self.calls = 0
+
+        def run(self, command, **kwargs):
+            self.calls += 1
+            item_id = command[command.index("+workshop_download_item") + 2]
+            line = f"ERROR! Download item {item_id} failed (Failure)."
+            kwargs["on_line"](line)
+            kwargs["log_path"].parent.mkdir(parents=True, exist_ok=True)
+            kwargs["log_path"].write_text(line + "\\n", encoding="utf-8")
+            return ProcessResult(0, line)
+
+    runner = FailureRunner()
+    engine = DownloadEngine(
+        paths,
+        "account",
+        policy=DownloadPolicy(
+            max_attempts=30,
+            attempt_timeout_seconds=10,
+            initial_backoff_seconds=0,
+            max_backoff_seconds=0,
+            max_stagnant_attempts=8,
+        ),
+        runner=runner,
+    )
+
+    result = engine.download("3530099560")
+
+    assert result.status == JobStatus.FAILED
+    assert runner.calls == 1
+    assert "explicitly reported" in result.message
+    assert "exit code 0" in result.message
+
