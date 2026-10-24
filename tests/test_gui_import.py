@@ -487,3 +487,126 @@ def test_read_only_text_context_menu_disables_cut_and_paste(monkeypatch):
     assert states["Copy"] == "disabled"
     assert states["Paste"] == "disabled"
     assert states["Select All"] == "normal"
+
+
+def test_queue_search_and_status_filter_keep_persisted_rows_and_global_summary(monkeypatch):
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+
+    class Variable:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class FakeTable:
+        def __init__(self):
+            self.rows = {}
+
+        def get_children(self, _parent=""):
+            return tuple(self.rows)
+
+        def exists(self, item_id):
+            return item_id in self.rows
+
+        def delete(self, item_id):
+            self.rows.pop(item_id, None)
+
+        def insert(self, _parent, _index, *, iid, values, tags=()):
+            self.rows[iid] = {"values": tuple(values), "tags": tuple(tags)}
+
+        def item(self, item_id, option=None, **kwargs):
+            if kwargs:
+                self.rows[item_id].update(kwargs)
+            if option:
+                return self.rows[item_id].get(option)
+            return self.rows[item_id]
+
+        def move(self, item_id, _parent, index):
+            items = list(self.rows.items())
+            selected = next(pair for pair in items if pair[0] == item_id)
+            items.remove(selected)
+            items.insert(index, selected)
+            self.rows = dict(items)
+
+    app = SimpleNamespace(
+        queue_rows={
+            "3296316642": {
+                "workshop_id": "3296316642", "title": "Death Spiral",
+                "status": "queued", "attempt": 0, "max_attempts": 30,
+                "bytes_received": 0, "expected_bytes": 0, "message": "",
+            },
+            "123456789": {
+                "workshop_id": "123456789", "title": "Active Map",
+                "status": "downloading", "attempt": 1, "max_attempts": 30,
+                "bytes_received": 100, "expected_bytes": 1000, "message": "transfer",
+            },
+            "555555555": {
+                "workshop_id": "555555555", "title": "Failed Map",
+                "status": "failed", "attempt": 2, "max_attempts": 30,
+                "bytes_received": 0, "expected_bytes": 0, "message": "network failure",
+            },
+        },
+        queue_search_var=Variable("death"),
+        queue_status_filter_var=Variable("All statuses"),
+        table=FakeTable(),
+        summary_vars={key: Variable("0") for key in ("queued", "active", "completed", "attention")},
+    )
+    app._render_queue_row = lambda row: gui.DownloaderApp._render_queue_row(app, row)
+    app._refresh_queue_summary = lambda: gui.DownloaderApp._refresh_queue_summary(app)
+
+    gui.DownloaderApp._refresh_queue_view(app)
+    assert tuple(app.table.rows) == ("3296316642",)
+    assert len(app.queue_rows) == 3
+    assert {key: value.get() for key, value in app.summary_vars.items()} == {
+        "queued": "1", "active": "1", "completed": "0", "attention": "1",
+    }
+
+    app.queue_search_var.set("")
+    app.queue_status_filter_var.set("Active")
+    gui.DownloaderApp._refresh_queue_view(app)
+    assert tuple(app.table.rows) == ("123456789",)
+    assert len(app.queue_rows) == 3
+    assert {key: value.get() for key, value in app.summary_vars.items()} == {
+        "queued": "1", "active": "1", "completed": "0", "attention": "1",
+    }
+
+
+def test_unknown_size_disk_preflight_does_not_prompt_or_block_downloads(tmp_path, monkeypatch):
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+    from bo3wd.models import WorkshopItem
+
+    class Variable:
+        def __init__(self):
+            self.value = ""
+
+        def set(self, value):
+            self.value = value
+
+    monkeypatch.setattr(
+        "bo3wd.preflight.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=16 * 1024**3, used=1 * 1024**3, free=15 * 1024**3),
+    )
+    monkeypatch.setattr(
+        gui.messagebox, "askyesno",
+        lambda *_args, **_kwargs: pytest.fail("unknown size with sufficient free space must not block"),
+    )
+    app = SimpleNamespace(
+        status_var=Variable(),
+        _format_bytes=gui.DownloaderApp._format_bytes,
+    )
+
+    assert gui.DownloaderApp._confirm_disk_space(
+        app, [WorkshopItem("3296316642", expected_bytes=0)],
+        tmp_path / "steamcmd.exe", operation="download",
+    )
+    assert "downloads are not blocked" in app.status_var.value
