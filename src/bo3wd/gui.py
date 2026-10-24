@@ -1516,7 +1516,7 @@ class DownloaderApp(tk.Tk):
             messagebox.showinfo(
                 "Update in progress",
                 "The update is being downloaded and verified. Let this operation finish; "
-                "the app will offer to restart after verification.",
+                "after verification, the app will close and a prompt will ask whether to open the new version.",
             )
             return
         if self.running:
