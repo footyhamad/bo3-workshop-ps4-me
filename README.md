@@ -46,7 +46,7 @@ The UI is the default when run without arguments. Use **Add + Start** to add an 
 
 Use **Check for Updates** in the packaged Windows EXE. It compares version numbers, downloads a stable GitHub Release, and verifies the executable SHA-256 against `SHA256SUMS.txt`. After the verified versioned EXE is staged, the current app closes and a separate Windows prompt asks whether to open the new version. The original EXE is not replaced; continue launching the versioned EXE after accepting an update.
 
-Version 2.1.0 adds more frequent KB-level disk progress, a system-wide network RX/TX meter, and a safe preview-and-confirm cleanup action for partial-cache folders untouched for seven days. It also improves progress tree scans and reports stalled disk growth directly. The release workflow validates versions, runs tests and lint, builds the standalone EXE, and publishes the binary plus checksum manifest.
+Version 2.2.0 improves SteamCMD failure handling: explicit item-level failure output is reported immediately even when SteamCMD exits with code 0, while explicit connection errors remain retryable. The release workflow validates versions, runs tests and lint, builds the standalone EXE, and publishes the binary plus checksum manifest.
 
 ## CLI
 
@@ -72,6 +72,7 @@ python -m bo3wd download "https://steamcommunity.com/sharedfiles/filedetails/?id
 - A hung SteamCMD process is terminated by a watchdog. This does not remove or truncate the downloader's existing partial files.
 - Recognized authentication prompts stop immediately. Complete login/Steam Guard interactively once, then retry the item.
 - Explicit access-denied, missing-item and subscription errors stop immediately; the downloader does not attempt to bypass ownership or permissions.
+- An explicit `ERROR! Download item <id> failed (Failure)` now stops that job immediately even if SteamCMD reports exit code 0; explicit connection/time-out failures remain retryable. This prevents a long retry loop when SteamCMD has already declared the item failed.
 - Repeated attempts with no observed growth stop after the configured stagnant-attempt budget. The existing partial and completed content remain available for another manual retry. A process crash leaves job state recoverable on the next app launch.
 - `Stop current attempt` terminates the current SteamCMD process. Items not yet started remain queued. Use **Retry selected** to queue a cancelled/failed/completed row again; this only changes history/queue state.
 
