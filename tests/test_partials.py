@@ -8,6 +8,8 @@ def _write_file(path, data, modified_at):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     os.utime(path, (modified_at, modified_at))
+    # Directory timestamps also reflect the last entry created/removed in each folder.
+    os.utime(path.parent, (modified_at, modified_at))
 
 
 def test_finds_only_numeric_partial_folders_older_than_seven_days(tmp_path):
