@@ -295,3 +295,195 @@ def test_integrity_worker_forces_steamcmd_validation_and_writes_a_report(tmp_pat
     assert summary["results"][0]["workshop_id"] == "3296316642"
     report = json.loads(Path(summary["report_path"]).read_text(encoding="utf-8"))
     assert report["summary"]["verified"] == 1
+
+
+def test_text_entry_context_menu_offers_edit_actions_and_preserves_shortcuts(monkeypatch):
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+
+    class FakeMenu:
+        def __init__(self, owner, **_kwargs):
+            self.owner = owner
+            self.commands = {}
+            self.states = {}
+            owner.menus.append(self)
+
+        def add_command(self, *, label, command):
+            self.commands[label] = command
+
+        def add_separator(self):
+            return None
+
+        def entryconfigure(self, label, *, state):
+            self.states[label] = state
+
+        def tk_popup(self, x, y):
+            self.popup_position = (x, y)
+
+        def grab_release(self):
+            self.released = True
+
+    class FakeEntry:
+        def __init__(self):
+            self.bindings = {}
+            self.menus = []
+            self.events = []
+            self.state = "normal"
+            self.text = "Workshop URL"
+            self.has_selection = True
+            self.focused = False
+            self.caret = None
+
+        def bind(self, sequence, callback, add=None):
+            self.bindings[sequence] = callback
+            assert add == "+"
+
+        def focus_set(self):
+            self.focused = True
+
+        def selection_present(self):
+            return self.has_selection
+
+        def cget(self, name):
+            assert name == "state"
+            return self.state
+
+        def clipboard_get(self):
+            return "clipboard text"
+
+        def get(self):
+            return self.text
+
+        def index(self, location):
+            assert location.startswith("@")
+            return 3
+
+        def icursor(self, position):
+            self.caret = position
+
+        def selection_range(self, first, last):
+            self.selection = (first, last)
+            self.has_selection = True
+
+        def event_generate(self, virtual_event):
+            self.events.append(virtual_event)
+
+    monkeypatch.setattr(gui.tk, "Menu", FakeMenu)
+    app = SimpleNamespace(
+        _text_context_action=lambda widget, action: gui.DownloaderApp._text_context_action(
+            app, widget, action
+        )
+    )
+    widget = FakeEntry()
+    gui.DownloaderApp._attach_text_context_menu(app, widget)
+
+    assert "<Button-3>" in widget.bindings
+    popup_event = SimpleNamespace(x=12, y=4, x_root=312, y_root=404)
+    assert widget.bindings["<Button-3>"](popup_event) == "break"
+
+    menu = widget.menus[0]
+    assert set(menu.commands) == {"Cut", "Copy", "Paste", "Select All"}
+    assert menu.states == {
+        "Cut": "normal",
+        "Copy": "normal",
+        "Paste": "normal",
+        "Select All": "normal",
+    }
+    assert menu.popup_position == (312, 404)
+    assert menu.released is True
+    assert widget.focused is True
+
+    menu.commands["Cut"]()
+    menu.commands["Copy"]()
+    menu.commands["Paste"]()
+    menu.commands["Select All"]()
+    assert widget.events == ["<<Cut>>", "<<Copy>>", "<<Paste>>"]
+    assert widget.selection == (0, gui.tk.END)
+    assert widget.caret == gui.tk.END
+
+    # With no selection, Cut and Copy disable, while Paste remains available.
+    widget.has_selection = False
+    widget.bindings["<Button-3>"](popup_event)
+    assert menu.states["Cut"] == "disabled"
+    assert menu.states["Copy"] == "disabled"
+    assert menu.states["Paste"] == "normal"
+
+
+def test_read_only_text_context_menu_disables_cut_and_paste(monkeypatch):
+    pytest.importorskip("tkinter")
+    from types import SimpleNamespace
+
+    import bo3wd.gui as gui
+
+    class FakeMenu:
+        def __init__(self, owner, **_kwargs):
+            self.owner = owner
+            self.commands = {}
+            self.states = {}
+            owner.menus.append(self)
+
+        def add_command(self, *, label, command):
+            self.commands[label] = command
+
+        def add_separator(self):
+            return None
+
+        def entryconfigure(self, label, *, state):
+            self.states[label] = state
+
+        def tk_popup(self, *_coords):
+            return None
+
+        def grab_release(self):
+            return None
+
+    class FakeText:
+        def __init__(self):
+            self.bindings = {}
+            self.menus = []
+            self.state = "disabled"
+
+        def bind(self, sequence, callback, add=None):
+            self.bindings[sequence] = callback
+
+        def focus_set(self):
+            return None
+
+        def index(self, _location):
+            return "1.0"
+
+        def tag_ranges(self, _tag):
+            return ()
+
+        def mark_set(self, *_args):
+            return None
+
+        def compare(self, *_args):
+            return False
+
+        def cget(self, _name):
+            return self.state
+
+        def clipboard_get(self):
+            return "log text"
+
+        def get(self, *_args):
+            return "read-only logs"
+
+    monkeypatch.setattr(gui.tk, "Menu", FakeMenu)
+    app = SimpleNamespace(
+        _text_context_action=lambda widget, action: gui.DownloaderApp._text_context_action(
+            app, widget, action
+        )
+    )
+    widget = FakeText()
+    gui.DownloaderApp._attach_text_context_menu(app, widget)
+    widget.bindings["<Button-3>"](SimpleNamespace(x=1, y=1, x_root=10, y_root=10))
+
+    states = widget.menus[0].states
+    assert states["Cut"] == "disabled"
+    assert states["Copy"] == "disabled"
+    assert states["Paste"] == "disabled"
+    assert states["Select All"] == "normal"
