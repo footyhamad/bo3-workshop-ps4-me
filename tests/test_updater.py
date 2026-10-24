@@ -9,7 +9,7 @@ from bo3wd.updater import (
     CHECKSUM_NAME,
     ReleaseInfo,
     UpdateError,
-    _powershell_update_script,
+    _powershell_open_update_script,
     check_for_update,
     download_verified_update,
     parse_version,
@@ -158,7 +158,7 @@ def test_download_verifies_checksum_and_stages_next_to_application(tmp_path, mon
     assert staged.parent == target_dir
     assert staged.is_file()
     assert staged.read_bytes() == payload
-    assert staged.name == "BO3WorkshopDownloader.update-v2.10.0.exe"
+    assert staged.name == "BO3WorkshopDownloader-v2.10.0.exe"
     assert not list(target_dir.glob("*.part"))
 
 
@@ -214,15 +214,17 @@ def test_release_metadata_rejects_untrusted_download_url(monkeypatch):
         check_for_update("2.0.0")
 
 
-def test_powershell_paths_are_base64_data_not_interpolated_commands(tmp_path):
-    source = tmp_path / "stage; do-not-run.exe"
-    target = tmp_path / "app 'quoted'.exe"
-    backup = tmp_path / "backup.exe"
+def test_update_prompt_waits_for_exit_and_prompts_to_open_the_new_exe(tmp_path):
+    source = tmp_path / "new update.exe"
     log = tmp_path / "update.log"
-    script = _powershell_update_script(source, target, backup, log, 1234)
+    script = _powershell_open_update_script(source, log, 1234)
+
     assert str(source) not in script
-    assert str(target) not in script
+    assert str(log) not in script
     assert "$parentProcessId = 1234" in script
     assert "WaitForExit" in script
-    assert "Move-Item" in script
-    assert "Start-Process" in script
+    assert "MessageBox]::Show" in script
+    assert "DialogResult]::Yes" in script
+    assert "Start-Process -FilePath $source" in script
+    assert "Move-Item" not in script
+    assert "BO3 Workshop Downloader - Update ready" in script
