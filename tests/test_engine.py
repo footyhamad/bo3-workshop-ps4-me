@@ -109,7 +109,7 @@ def test_explicit_steamcmd_failure_is_not_retried_just_because_exit_code_is_zero
             line = f"ERROR! Download item {item_id} failed (Failure)."
             kwargs["on_line"](line)
             kwargs["log_path"].parent.mkdir(parents=True, exist_ok=True)
-            kwargs["log_path"].write_text(line + "\\n", encoding="utf-8")
+            kwargs["log_path"].write_text(line + "\n", encoding="utf-8")
             return ProcessResult(0, line)
 
     runner = FailureRunner()
