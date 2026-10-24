@@ -14,6 +14,12 @@ from typing import Callable, Iterable
 from . import APP_ID
 from .identifiers import normalize_workshop_id
 
+
+def steam_client_workshop_uri(workshop_id: str | int) -> str:
+    """Build the official Steam Client deep-link for a numeric Workshop item ID."""
+    item_id = normalize_workshop_id(workshop_id)
+    return f"steam://url/CommunityFilePage/{item_id}"
+
 _PATH_VALUE = re.compile(r'"path"\s*"((?:\\.|[^"\\])*)"', re.IGNORECASE)
 _OLD_LIBRARY_VALUE = re.compile(r'"\d+"\s*"((?:\\.|[^"\\])*)"')
 

@@ -29,7 +29,10 @@ from .preflight import assess_disk_space
 from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
-from .steamclient import SteamClientImportResult, SteamClientItemNotFound, import_steam_client_item
+from .steamclient import (
+    SteamClientImportResult, SteamClientItemNotFound, import_steam_client_item,
+    steam_client_workshop_uri,
+)
 from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_update_prompt
 
 
@@ -1579,6 +1582,39 @@ class DownloaderApp(tk.Tk):
                     self._launch_steam_client_import(item_id, content_root, [Path(selected_root)])
                     return
         self._finish_steam_client_import()
+        open_steam = messagebox.askyesno(
+            "No local Steam Client copy found",
+            f"No installed Steam Client copy of Workshop item {item_id} was found.\n\n"
+            "Open this item's page in the official Steam Client now? If Steam offers Subscribe, "
+            "let its download finish, then select this ID and click Import Steam Client Copy again.\n\n"
+            "This cannot restore files Steam no longer provides or override an incompatibility/removal notice.",
+        )
+        if open_steam:
+            try:
+                opened = webbrowser.open(steam_client_workshop_uri(item_id), new=1)
+            except Exception as exc:
+                opened = False
+                open_error = str(exc)
+            else:
+                open_error = "No Steam protocol handler opened the page."
+            if opened:
+                self.status_var.set(
+                    f"Steam Client page opened for {item_id} · subscribe if available, then import the completed local copy"
+                )
+                messagebox.showinfo(
+                    "Steam Client fallback",
+                    "The Workshop page was opened through Steam's official protocol. "
+                    "If Steam allows a download, wait for it to finish, then select the same ID and click "
+                    "Import Steam Client Copy. Existing SteamCMD files will not be overwritten.",
+                )
+            else:
+                self.status_var.set(f"Could not open Steam Client page for {item_id}")
+                messagebox.showwarning(
+                    "Could not open Steam Client",
+                    f"{open_error}\n\nOpen this Workshop URL manually in Steam:\n"
+                    f"https://steamcommunity.com/sharedfiles/filedetails/?id={item_id}",
+                )
+            return
         self.status_var.set(f"Steam Client copy not found for {item_id} · no files changed")
         messagebox.showwarning(
             "No Steam Client copy found",

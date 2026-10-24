@@ -8,6 +8,7 @@ from bo3wd.steamclient import (
     _extract_library_paths,
     discover_steam_libraries,
     import_steam_client_item,
+    steam_client_workshop_uri,
 )
 
 
@@ -118,3 +119,11 @@ def test_import_refuses_destination_symlink(tmp_path):
 
     with pytest.raises(SteamClientImportError, match="symlink or junction"):
         import_steam_client_item(item_id, content_root, extra_library_roots=[library])
+
+
+def test_steam_client_uri_uses_validated_numeric_id():
+    assert steam_client_workshop_uri("3530099560") == "steam://url/CommunityFilePage/3530099560"
+    assert steam_client_workshop_uri("https://steamcommunity.com/sharedfiles/filedetails/?id=123") == \
+        "steam://url/CommunityFilePage/123"
+    with pytest.raises(ValueError):
+        steam_client_workshop_uri("steam://malicious")

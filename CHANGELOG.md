@@ -4,7 +4,7 @@
 
 - Added an Import Steam Client Copy action for a selected Workshop ID.
 - Discovers Steam libraries from Windows registry/default paths and each library's libraryfolders.vdf; supports a manual library-folder scan when automatic discovery misses a custom installation.
-- Copies only files already present in the Steam Client's local Workshop content folder; it does not invoke downloads or bypass Steam access/removal restrictions.
+- Copies only files already present in the Steam Client's local Workshop content folder; when no local copy is found, offers to open the item in the official Steam Client for a manual availability check. It does not invoke downloads or bypass Steam access/removal restrictions.
 - Preserves existing files: identical files are retained, differing collisions are skipped and listed, and new files are copied atomically with live byte progress.
 - Adds tests for VDF path discovery, missing items, safe import, duplicate/conflicting files, and destination symlink refusal.
 
