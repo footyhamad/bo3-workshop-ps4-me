@@ -107,3 +107,43 @@ def test_resume_old_jobs_requeues_only_failed_and_cancelled_rows(tmp_path):
     assert history.get("203")["status"] == JobStatus.COMPLETED.value
     assert history.get("201")["status"] == JobStatus.QUEUED.value
     assert partial.read_bytes() == b"resume these bytes"
+
+
+def test_queue_order_is_persisted_and_reorder_only_moves_queued_items(tmp_path):
+    history = JobHistory(tmp_path / "queue.sqlite3")
+    for item_id in ("301", "302", "303"):
+        history.ensure_item(WorkshopItem(item_id, title=f"Item {item_id}"))
+    assert [row["workshop_id"] for row in history.pending_items()] == ["301", "302", "303"]
+
+    assert history.move_queued("303", -1) is True
+    assert [row["workshop_id"] for row in history.pending_items()] == ["301", "303", "302"]
+    assert history.move_queued("301", -1) is False
+    history.update(DownloadEvent("303", JobStatus.DOWNLOADING, attempt=1))
+    assert history.move_queued("303", 1) is False
+    assert [row["workshop_id"] for row in history.pending_items()] == ["301", "302"]
+
+
+def test_existing_database_schema_migrates_queue_position(tmp_path):
+    import sqlite3
+    import time
+
+    path = tmp_path / "legacy.sqlite3"
+    db = sqlite3.connect(path)
+    db.execute(
+        """CREATE TABLE jobs (
+           workshop_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+           url TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+           attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 0,
+           bytes_received INTEGER NOT NULL DEFAULT 0, expected_bytes INTEGER NOT NULL DEFAULT 0,
+           message TEXT NOT NULL DEFAULT '', log_path TEXT NOT NULL DEFAULT '',
+           created_at REAL NOT NULL, updated_at REAL NOT NULL, finished_at REAL)"""
+    )
+    now = time.time()
+    db.execute("INSERT INTO jobs(workshop_id,status,created_at,updated_at) VALUES('402','queued',?,?)", (now, now))
+    db.execute("INSERT INTO jobs(workshop_id,status,created_at,updated_at) VALUES('401','queued',?,?)", (now - 1, now - 1))
+    db.commit()
+    db.close()
+
+    history = JobHistory(path)
+    assert [row["workshop_id"] for row in history.pending_items()] == ["401", "402"]
+    assert history.get("401")["queue_position"] < history.get("402")["queue_position"]
