@@ -191,6 +191,7 @@ class WorkshopMetadataClient:
         )
         result: dict[str, WorkshopItem] = {}
         api_error: Exception | None = None
+        do_not_page_fallback: set[str] = set()
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 payload = json.load(response)
@@ -200,7 +201,6 @@ class WorkshopMetadataClient:
             if not isinstance(entries, list):
                 raise MetadataError("Steam returned a malformed publishedfiledetails list")
             requested = set(ids)
-            do_not_page_fallback: set[str] = set()
             for item in entries:
                 if not isinstance(item, dict):
                     continue
