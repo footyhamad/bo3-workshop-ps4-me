@@ -80,6 +80,8 @@ def test_metadata_normalizes_ids_and_handles_bad_optional_numeric_fields(monkeyp
     seen = {}
 
     def fake_urlopen(request, timeout):
+        if request.method == "GET":
+            return Response(b"<html><body></body></html>")
         seen["body"] = request.data.decode()
         return Response(json.dumps(payload).encode())
 
