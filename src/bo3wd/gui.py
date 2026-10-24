@@ -22,13 +22,12 @@ from .integrity import (
     IntegrityCheckError, discover_integrity_targets, list_integrity_reports,
     load_integrity_report, write_integrity_report,
 )
-from .metadata import MetadataError, WorkshopMetadataClient
 from .models import DownloadEvent, DownloadPaths, DownloadPolicy, JobStatus, WorkshopItem
 from .preflight import assess_disk_space
 from .queueview import STATUS_FILTERS, matches_queue_row
 from .steamcmd import discover_steamcmd, read_saved_account
 from .storage import JobHistory, SettingsStore, default_data_dir
-from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_self_update
+from .updater import ReleaseInfo, check_for_update, download_verified_update, launch_update_prompt
 
 
 class DownloaderApp(tk.Tk):
@@ -562,8 +561,8 @@ class DownloaderApp(tk.Tk):
         if not messagebox.askyesno(
             "Update available",
             f"Installed version: v{__version__}\nLatest stable version: v{release.latest_version}\n\n"
-            "Download the official release, verify its SHA-256 checksum, replace this executable, "
-            "and restart the application?",
+            "Download and verify the official release, then close this app. "
+            "After it exits, a Windows prompt will ask whether to open the downloaded version?",
         ):
             self.status_var.set("Update cancelled · current version unchanged")
             return
@@ -583,7 +582,7 @@ class DownloaderApp(tk.Tk):
             staged = download_verified_update(
                 release, target.parent, target_name=target.name
             )
-            launch_self_update(staged, target, __version__)
+            launch_update_prompt(staged)
         except Exception as exc:
             self.events.put(("update_failed", str(exc)))
         else:
@@ -639,7 +638,6 @@ class DownloaderApp(tk.Tk):
         if not ids:
             self.status_var.set("Enter a Workshop ID or URL before adding a download.")
             return
-        steam = self.steamcmd_var.get().strip()
         for item_id in ids:
             log_path = self.data_dir / "logs" / f"{item_id}.log"
             self.history.ensure_item(WorkshopItem(workshop_id=item_id, title=item_id), log_path)
@@ -650,32 +648,8 @@ class DownloaderApp(tk.Tk):
             added_message += " New items will start when you resume the queue after this batch."
         self.status_var.set(added_message)
         self._refresh_queue_summary()
-        if steam and Path(steam).is_file():
-            threading.Thread(target=self._lookup_metadata, args=(ids,), daemon=True, name="bo3wd-metadata").start()
         if start_after:
             self.after(80, self._start_queue)
-
-    def _lookup_metadata(self, ids: list[str]) -> None:
-        client = WorkshopMetadataClient()
-        details = {}
-        errors: list[str] = []
-        for offset in range(0, len(ids), 100):
-            try:
-                details.update(client.fetch_many(ids[offset:offset + 100]))
-            except MetadataError as exc:
-                errors.append(str(exc))
-        for item_id in ids:
-            meta = details.get(item_id)
-            if not meta:
-                continue
-            self.history.ensure_item(meta, self.data_dir / "logs" / f"{item_id}.log")
-            self.events.put(("refresh", item_id))
-        if errors:
-            self.events.put((
-                "message",
-                "Size/title metadata could not be fetched for every item. Jobs remain queued and "
-                "will still be attempted; unknown sizes only limit the progress estimate."
-            ))
 
     def _import_list(self) -> None:
         chosen = filedialog.askopenfilename(title="Import Workshop ID list", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
@@ -709,39 +683,19 @@ class DownloaderApp(tk.Tk):
         return f"{value:.1f} TB"
 
     def _update_download_progress(self, event: DownloadEvent) -> None:
-        stored = self.history.get(event.workshop_id) or {}
+        """Show observed transfer bytes only; total-size metadata is never required."""
         received = max(0, int(event.bytes_received))
-        expected = max(0, int(event.expected_bytes or stored.get("expected_bytes") or 0))
         speed = max(0.0, float(event.speed_bytes_per_second))
-        eta = ""
-        if event.eta_seconds is not None and event.eta_seconds >= 0:
-            seconds = int(event.eta_seconds)
-            eta = f" · ETA {seconds // 60}m {seconds % 60:02d}s"
+        speed_text = f" · {self._format_bytes(speed)}/s" if speed > 0 else ""
 
         if event.status == JobStatus.DOWNLOADING:
-            if expected > 0:
-                if self.progress_is_indeterminate:
-                    self.download_progress.stop()
-                    self.progress_is_indeterminate = False
-                self.download_progress.configure(mode="determinate", maximum=100)
-                percent = min(100.0, received * 100.0 / expected)
-                self.download_progress.configure(value=percent)
-                data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
-                self.progress_text_var.set(
-                    f"{event.workshop_id}: {percent:.1f}% · {data_text}"
-                    + (f" · {self._format_bytes(speed)}/s" if speed > 0 else "")
-                    + eta
-                )
-            else:
-                self.download_progress.configure(mode="indeterminate")
-                if not self.progress_is_indeterminate:
-                    self.download_progress.start(12)
-                    self.progress_is_indeterminate = True
-                self.progress_text_var.set(
-                    f"{event.workshop_id}: {self._format_bytes(received)} downloaded"
-                    + (f" · {self._format_bytes(speed)}/s" if speed > 0 else "")
-                    + " · waiting for Steam's total-size metadata"
-                )
+            self.download_progress.configure(mode="indeterminate")
+            if not self.progress_is_indeterminate:
+                self.download_progress.start(12)
+                self.progress_is_indeterminate = True
+            self.progress_text_var.set(
+                f"{event.workshop_id}: {self._format_bytes(received)} downloaded{speed_text}"
+            )
         elif event.status == JobStatus.PREPARING:
             if self.progress_is_indeterminate:
                 self.download_progress.stop()
@@ -752,16 +706,9 @@ class DownloaderApp(tk.Tk):
             if self.progress_is_indeterminate:
                 self.download_progress.stop()
                 self.progress_is_indeterminate = False
-            self.download_progress.configure(mode="determinate", maximum=100)
-            if expected > 0:
-                percent = min(100.0, received * 100.0 / expected)
-                self.download_progress.configure(value=percent)
-                data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
-            else:
-                self.download_progress.configure(value=0)
-                data_text = f"{self._format_bytes(received)} received"
+            self.download_progress.configure(mode="determinate", maximum=100, value=0)
             self.progress_text_var.set(
-                f"{event.workshop_id}: retrying · {data_text} retained"
+                f"{event.workshop_id}: retrying · {self._format_bytes(received)} retained"
             )
         elif event.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             if self.progress_is_indeterminate:
@@ -774,14 +721,9 @@ class DownloaderApp(tk.Tk):
                     f"{event.workshop_id}: download complete · {self._format_bytes(received)} downloaded"
                 )
             else:
-                if expected > 0:
-                    self.download_progress.configure(value=min(100.0, received * 100.0 / expected))
-                    data_text = f"{self._format_bytes(received)} / {self._format_bytes(expected)}"
-                else:
-                    self.download_progress.configure(value=0)
-                    data_text = f"{self._format_bytes(received)} received"
+                self.download_progress.configure(value=0)
                 self.progress_text_var.set(
-                    f"{event.workshop_id}: {event.status.value} · {data_text}"
+                    f"{event.workshop_id}: {event.status.value} · {self._format_bytes(received)} received"
                 )
 
     def _upsert_row(self, row: dict[str, object] | DownloadEvent) -> None:
@@ -821,17 +763,8 @@ class DownloaderApp(tk.Tk):
         attempt = int(data.get("attempt", 0) or 0)
         max_attempts = int(data.get("max_attempts", 0) or 0)
         bytes_received = int(data.get("bytes_received", 0) or 0)
-        expected_bytes = int(data.get("expected_bytes", 0) or 0)
-        progress = (
-            f"{min(100, bytes_received * 100 // expected_bytes)}%"
-            if expected_bytes
-            else ("Downloading…" if status == JobStatus.DOWNLOADING.value else "—")
-        )
-        received = (
-            f"{self._format_bytes(bytes_received)} / {self._format_bytes(expected_bytes)}"
-            if expected_bytes
-            else f"{self._format_bytes(bytes_received)} received"
-        )
+        progress = "Downloading…" if status == JobStatus.DOWNLOADING.value else "—"
+        received = f"{self._format_bytes(bytes_received)} downloaded"
         try:
             speed = max(0.0, float(data.get("speed_bytes_per_second", 0) or 0))
         except (TypeError, ValueError, OverflowError):
@@ -1521,12 +1454,8 @@ class DownloaderApp(tk.Tk):
                     )
                 elif event[0] == "update_ready":
                     self.update_in_progress = False
-                    self.status_var.set(f"Applying v{event[1]} · the application will restart")
-                    messagebox.showinfo(
-                        "Update verified",
-                        f"Version {event[1]} downloaded and SHA-256 verified. "
-                        "The app will close, replace its executable, and reopen. "
-                        "A versioned backup of the previous executable will be retained.",
+                    self.status_var.set(
+                        f"Version {event[1]} verified · closing to show the open-update prompt"
                     )
                     self.destroy()
                 elif event[0] == "integrity_done":
