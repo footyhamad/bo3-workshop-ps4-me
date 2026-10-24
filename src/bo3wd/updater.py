@@ -200,7 +200,7 @@ def download_verified_update(
     if expected_hash is None:
         raise UpdateError("The release checksum manifest has no entry for the application executable.")
 
-    staged_name = f"{Path(target_name).stem}.update-v{release.latest_version}{Path(target_name).suffix}"
+    staged_name = f"{Path(APP_EXE_NAME).stem}-v{release.latest_version}{Path(APP_EXE_NAME).suffix}"
     staged_path = destination / staged_name
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{Path(target_name).stem}.update-", suffix=".part", dir=destination
@@ -270,63 +270,47 @@ def _b64_path(path: Path) -> str:
     return base64.b64encode(str(path.resolve()).encode("utf-8")).decode("ascii")
 
 
-def _powershell_update_script(
-    source: Path, target: Path, backup: Path, log_path: Path, parent_pid: int
-) -> str:
-    """Build a PowerShell script with paths encoded as data to avoid command injection."""
+def _powershell_open_update_script(source: Path, log_path: Path, parent_pid: int) -> str:
+    """Build a helper that waits for app exit, then asks whether to open the staged EXE."""
     decode = "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{0}'))"
     return f"""
 $ErrorActionPreference = 'Stop'
 $parentProcessId = {int(parent_pid)}
 $source = {decode.format(_b64_path(source))}
-$target = {decode.format(_b64_path(target))}
-$backup = {decode.format(_b64_path(backup))}
 $logPath = {decode.format(_b64_path(log_path))}
 try {{
     $parent = Get-Process -Id $parentProcessId -ErrorAction SilentlyContinue
     if ($null -ne $parent) {{ $parent.WaitForExit() }}
-    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {{ throw 'Staged update file is missing.' }}
-    if (Test-Path -LiteralPath $backup) {{ Remove-Item -LiteralPath $backup -Force }}
-    if (Test-Path -LiteralPath $target) {{ Move-Item -LiteralPath $target -Destination $backup -Force }}
-    try {{
-        Move-Item -LiteralPath $source -Destination $target -Force
-        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {{ throw 'Updated executable is missing after replacement.' }}
-        Start-Process -FilePath $target
-    }} catch {{
-        if (-not (Test-Path -LiteralPath $target) -and (Test-Path -LiteralPath $backup)) {{
-            Move-Item -LiteralPath $backup -Destination $target -Force
-        }}
-        throw
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {{ throw 'Downloaded update file is missing.' }}
+    Add-Type -AssemblyName System.Windows.Forms
+    $fileName = [System.IO.Path]::GetFileName($source)
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        ("The verified update is ready: " + $fileName + [Environment]::NewLine + [Environment]::NewLine + "Open the new version now?"),
+        "BO3 Workshop Downloader - Update ready",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {{
+        Start-Process -FilePath $source -WorkingDirectory ([System.IO.Path]::GetDirectoryName($source))
     }}
 }} catch {{
-    try {{ Add-Content -LiteralPath $logPath -Value ('Update failed: ' + $_.Exception.Message) -Encoding UTF8 }} catch {{}}
+    try {{ Add-Content -LiteralPath $logPath -Value ('Update launch failed: ' + $_.Exception.Message) -Encoding UTF8 }} catch {{}}
     exit 1
 }}
 """
 
 
-def launch_self_update(staged_exe: Path, target_exe: Path, current_version: str) -> None:
-    """Launch a hidden helper that waits for this process, replaces the EXE, and relaunches it."""
+def launch_update_prompt(staged_exe: Path) -> None:
+    """After this app exits, prompt the user to open the verified versioned EXE."""
     if os.name != "nt" or not getattr(sys, "frozen", False):
-        raise UpdateError("Automatic replacement is supported only by the packaged Windows executable.")
+        raise UpdateError("Prompted update launching is supported only by the packaged Windows executable.")
     staged = Path(staged_exe).resolve()
-    target = Path(target_exe).resolve()
-    if staged.parent != target.parent:
-        raise UpdateError("The staged update must be in the same folder as the installed application.")
-    if not staged.is_file() or staged.stat().st_size <= 0:
-        raise UpdateError("The verified staged executable is missing or empty.")
-    if not target.is_file():
-        raise UpdateError("Could not locate the running application executable.")
-    backup = target.with_name(f"{target.stem}.backup-v{current_version}{target.suffix}")
+    if staged.suffix.lower() != ".exe" or not staged.is_file() or staged.stat().st_size <= 0:
+        raise UpdateError("The verified staged update executable is missing or empty.")
     log_path = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "BO3WorkshopDownloader" / "update.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Fail before closing the app if the installation folder is not writable.
-    fd, probe = tempfile.mkstemp(prefix=".bo3wd-write-test-", dir=target.parent)
-    os.close(fd)
-    os.unlink(probe)
-
-    script = _powershell_update_script(staged, target, backup, log_path, os.getpid())
+    script = _powershell_open_update_script(staged, log_path, os.getpid())
     encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
     try:
@@ -342,4 +326,4 @@ def launch_self_update(staged_exe: Path, target_exe: Path, current_version: str)
             creationflags=flags,
         )
     except OSError as exc:
-        raise UpdateError(f"Could not start the update helper: {exc}") from exc
+        raise UpdateError(f"Could not start the update prompt helper: {exc}") from exc
