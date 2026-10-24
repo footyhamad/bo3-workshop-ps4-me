@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0 — live byte progress, network meter, and partial cleanup
+
+- Optimized filesystem byte counting with `os.scandir` and increased sampling frequency so whole-KB progress updates more often.
+- Added a separate RX/TX meter using system network-interface counters; rates reflect overall machine traffic, not SteamCMD alone.
+- Added a preview-and-confirm cleanup for numeric SteamCMD partial folders with no file activity for at least seven days.
+- Protects queued/active IDs, rechecks age before removal, and restricts cleanup to the Workshop downloads cache rather than installed content.
+- Shows a no-new-disk-bytes timer during downloads to make stalled transfers easier to identify.
+- Adds regression tests for network-rate sampling and partial-cache safety.
 ## 2.0.9 — immediate downloads and prompted updates
 
 - Removed GUI-side Steam/API/Workshop size lookups from the queue-add path; new jobs are queued and started without waiting for a total-size result.
