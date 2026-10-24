@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.7 — right-click text editing menu
+
+- Added Cut, Copy, Paste, and Select All context actions to all editable text fields via the shared entry-field helper.
+- Added a read-only-aware context menu to the activity log: Copy and Select All are available, while Cut and Paste stay disabled.
+- Preserved native Tk virtual events so clipboard actions continue to use the platform's normal text handling.
+- Added regression tests for menu bindings, command availability, selection actions, and read-only widgets.
+
+
 ## 2.0.6 — visible integrity and live data progress
 
 - Moved the live downloaded-data and integrity-status panel above the queue table so it stays visible in shorter windows.
