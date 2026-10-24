@@ -1458,6 +1458,7 @@ class DownloaderApp(tk.Tk):
                         f"Version {event[1]} verified · closing to show the open-update prompt"
                     )
                     self.destroy()
+                    return
                 elif event[0] == "integrity_done":
                     summary = event[1]
                     self.running = False
