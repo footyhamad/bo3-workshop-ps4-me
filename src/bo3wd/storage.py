@@ -119,17 +119,29 @@ class JobHistory:
                     log_path TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
-                    finished_at REAL
+                    finished_at REAL,
+                    queue_position INTEGER NOT NULL DEFAULT 0
                 )"""
             )
+            columns = {str(column[1]) for column in db.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "queue_position" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN queue_position INTEGER NOT NULL DEFAULT 0")
+                existing = db.execute(
+                    "SELECT workshop_id FROM jobs ORDER BY created_at ASC, updated_at ASC, workshop_id ASC"
+                ).fetchall()
+                for position, row in enumerate(existing):
+                    db.execute(
+                        "UPDATE jobs SET queue_position=? WHERE workshop_id=?",
+                        (position, str(row["workshop_id"])),
+                    )
             db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)")
 
     def ensure_item(self, item: WorkshopItem, log_path: Path | None = None) -> None:
         now = time.time()
         with self._session() as db:
             db.execute(
-                """INSERT INTO jobs(workshop_id,title,url,status,expected_bytes,log_path,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?)
+                """INSERT INTO jobs(workshop_id,title,url,status,expected_bytes,log_path,created_at,updated_at,queue_position)
+                   VALUES(?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(queue_position)+1,0) FROM jobs))
                    ON CONFLICT(workshop_id) DO UPDATE SET
                      title=CASE WHEN excluded.title='' THEN jobs.title ELSE excluded.title END,
                      url=CASE WHEN excluded.url='' THEN jobs.url ELSE excluded.url END,
@@ -147,8 +159,8 @@ class JobHistory:
         with self._session() as db:
             db.execute(
                 """INSERT INTO jobs(workshop_id,title,url,status,attempt,max_attempts,bytes_received,
-                       expected_bytes,message,log_path,created_at,updated_at,finished_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       expected_bytes,message,log_path,created_at,updated_at,finished_at,queue_position)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(queue_position)+1,0) FROM jobs))
                    ON CONFLICT(workshop_id) DO UPDATE SET
                        title=CASE WHEN excluded.title='' THEN jobs.title ELSE excluded.title END,
                        url=CASE WHEN excluded.url='' THEN jobs.url ELSE excluded.url END,
@@ -169,7 +181,11 @@ class JobHistory:
     def list_jobs(self, limit: int = 500) -> list[dict[str, Any]]:
         with self._session() as db:
             rows = db.execute(
-                "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT ?", (max(1, min(limit, 5000)),)
+                """SELECT * FROM jobs
+                   ORDER BY CASE WHEN status=? THEN 0 ELSE 1 END,
+                            CASE WHEN status=? THEN queue_position END ASC,
+                            updated_at DESC LIMIT ?""",
+                (JobStatus.QUEUED.value, JobStatus.QUEUED.value, max(1, min(limit, 5000)))
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -181,7 +197,8 @@ class JobHistory:
     def pending_items(self) -> list[dict[str, Any]]:
         with self._session() as db:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE status=? ORDER BY created_at ASC", (JobStatus.QUEUED.value,)
+                "SELECT * FROM jobs WHERE status=? ORDER BY queue_position ASC, created_at ASC, workshop_id ASC",
+                (JobStatus.QUEUED.value,)
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -232,6 +249,36 @@ class JobHistory:
                 ),
             )
             return cursor.rowcount
+
+    def move_queued(self, workshop_id: str, direction: int) -> bool:
+        """Move a queued job one position up (-1) or down (+1) and persist the order."""
+        if direction not in {-1, 1}:
+            raise ValueError("direction must be -1 (up) or 1 (down)")
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT workshop_id, queue_position FROM jobs WHERE status=? "
+                "ORDER BY queue_position ASC, created_at ASC, workshop_id ASC",
+                (JobStatus.QUEUED.value,),
+            ).fetchall()
+            ids = [str(row["workshop_id"]) for row in rows]
+            try:
+                index = ids.index(workshop_id)
+            except ValueError:
+                return False
+            neighbour = index + direction
+            if neighbour < 0 or neighbour >= len(rows):
+                return False
+            current_position = int(rows[index]["queue_position"])
+            neighbour_position = int(rows[neighbour]["queue_position"])
+            db.execute(
+                "UPDATE jobs SET queue_position=? WHERE workshop_id=? AND status=?",
+                (neighbour_position, workshop_id, JobStatus.QUEUED.value),
+            )
+            db.execute(
+                "UPDATE jobs SET queue_position=? WHERE workshop_id=? AND status=?",
+                (current_position, ids[neighbour], JobStatus.QUEUED.value),
+            )
+            return True
 
     def clear_finished(self) -> int:
         with self._session() as db:
