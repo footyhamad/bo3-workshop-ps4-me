@@ -82,3 +82,27 @@ def test_report_is_atomic_and_records_cautions_and_results(tmp_path):
     assert "not a read-only scan" in payload["verification"]
     assert payload["results"][0]["workshop_id"] == "3296316642"
     assert not list(report.parent.glob("*.tmp"))
+
+
+def test_integrity_report_helpers_list_newest_and_reject_outside_paths(tmp_path):
+    from bo3wd.integrity import IntegrityCheckError, list_integrity_reports, load_integrity_report
+
+    started = time.time() - 2
+    older = write_integrity_report(
+        tmp_path, started_at=started, finished_at=time.time() - 1,
+        results=[{"workshop_id": "101", "status": "completed", "message": "ok"}],
+    )
+    newer = write_integrity_report(
+        tmp_path, started_at=started, finished_at=time.time(),
+        results=[{"workshop_id": "102", "status": "failed", "message": "bad"}],
+    )
+    reports = list_integrity_reports(tmp_path)
+    assert reports[0] == newer
+    assert older in reports
+    payload = load_integrity_report(newer, tmp_path)
+    assert payload["results"][0]["workshop_id"] == "102"
+
+    outside = tmp_path / "other.json"
+    outside.write_text('{"results": []}', encoding="utf-8")
+    with pytest.raises(IntegrityCheckError, match="report directory"):
+        load_integrity_report(outside, tmp_path)
