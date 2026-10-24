@@ -70,6 +70,7 @@ def test_download_progress_uses_live_bytes_without_size_reporting():
         progress_text_var=label,
         progress_is_indeterminate=False,
         _format_bytes=DownloaderApp._format_bytes,
+        _format_rate=DownloaderApp._format_rate,
     )
     event = DownloadEvent(
         workshop_id="123",
@@ -124,6 +125,7 @@ def test_download_progress_shows_received_bytes_when_total_size_is_unknown():
         progress_text_var=label,
         progress_is_indeterminate=False,
         _format_bytes=DownloaderApp._format_bytes,
+        _format_rate=DownloaderApp._format_rate,
     )
     event = DownloadEvent(
         workshop_id="123",
@@ -559,6 +561,7 @@ def test_queue_search_and_status_filter_keep_persisted_rows_and_global_summary(m
         table=FakeTable(),
         summary_vars={key: Variable("0") for key in ("queued", "active", "completed", "attention")},
         _format_bytes=gui.DownloaderApp._format_bytes,
+        _format_rate=gui.DownloaderApp._format_rate,
     )
     app._render_queue_row = lambda row: gui.DownloaderApp._render_queue_row(app, row)
     app._refresh_queue_summary = lambda: gui.DownloaderApp._refresh_queue_summary(app)
@@ -605,6 +608,7 @@ def test_unknown_size_disk_preflight_does_not_prompt_or_block_downloads(tmp_path
     app = SimpleNamespace(
         status_var=Variable(),
         _format_bytes=gui.DownloaderApp._format_bytes,
+        _format_rate=gui.DownloaderApp._format_rate,
     )
 
     assert gui.DownloaderApp._confirm_disk_space(
