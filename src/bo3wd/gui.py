@@ -533,7 +533,7 @@ class DownloaderApp(tk.Tk):
     
     def _check_for_updates(self) -> None:
         """Check the stable GitHub Releases channel without blocking the Tk event loop."""
-        if self.running or self.steam_import_in_progress:
+        if self.running or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Download or import in progress",
                 "Finish the active Workshop download/import before updating the application.",
@@ -897,7 +897,7 @@ class DownloaderApp(tk.Tk):
 
     def _check_file_integrity(self) -> None:
         """Run SteamCMD's native validation against already-installed Workshop items."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or self.steam_import_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Downloader busy",
                 "Finish or pause the current operation before starting an integrity check or partial cleanup.",
@@ -1102,7 +1102,7 @@ class DownloaderApp(tk.Tk):
         return True
 
     def _start_queue(self) -> None:
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or self.steam_import_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             return
         try:
             if not self._save_settings():
@@ -1244,7 +1244,7 @@ class DownloaderApp(tk.Tk):
 
     def _delete_old_partial_data(self) -> None:
         """Offer a preview before removing stale folders from SteamCMD's partial cache."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or self.steam_import_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Downloader busy",
                 "Pause the download/repair operation before cleaning partial-download data.",
@@ -1398,7 +1398,7 @@ class DownloaderApp(tk.Tk):
         messagebox.showerror("Partial cleanup failed", error)
 
     def _recover_partial_downloads(self) -> None:
-        if self.steam_import_in_progress:
+        if getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
             return
         if getattr(self, "partial_cleanup_in_progress", False):
@@ -1460,7 +1460,7 @@ class DownloaderApp(tk.Tk):
 
     def _import_from_steam_client(self) -> None:
         """Import a selected item only if a local Steam Client copy already exists."""
-        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or self.steam_import_in_progress:
+        if self.running or self.update_in_progress or self.partial_cleanup_in_progress or getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning(
                 "Downloader busy",
                 "Finish the current download, update, cleanup, or import before importing Steam Client files.",
@@ -1614,7 +1614,7 @@ class DownloaderApp(tk.Tk):
             messagebox.showinfo("Steam Client import finished", detail)
 
     def _resume_selected(self) -> None:
-        if self.steam_import_in_progress:
+        if getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
             return
         if getattr(self, "partial_cleanup_in_progress", False):
@@ -1663,7 +1663,7 @@ class DownloaderApp(tk.Tk):
         self._start_queue()
 
     def _retry_selected(self) -> None:
-        if self.steam_import_in_progress:
+        if getattr(self, "steam_import_in_progress", False):
             messagebox.showwarning("Import in progress", "Wait for the Steam Client import to finish first.")
             return
         if getattr(self, "partial_cleanup_in_progress", False):
@@ -1922,7 +1922,7 @@ class DownloaderApp(tk.Tk):
         self.after(120, self._poll_events)
 
     def _close(self) -> None:
-        if self.steam_import_in_progress:
+        if getattr(self, "steam_import_in_progress", False):
             messagebox.showinfo(
                 "Steam Client import in progress",
                 "Wait for the local file import to finish before closing. Final files are copied atomically.",
