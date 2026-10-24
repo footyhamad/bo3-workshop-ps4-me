@@ -557,6 +557,7 @@ def test_queue_search_and_status_filter_keep_persisted_rows_and_global_summary(m
         queue_status_filter_var=Variable("All statuses"),
         table=FakeTable(),
         summary_vars={key: Variable("0") for key in ("queued", "active", "completed", "attention")},
+        _format_bytes=gui.DownloaderApp._format_bytes,
     )
     app._render_queue_row = lambda row: gui.DownloaderApp._render_queue_row(app, row)
     app._refresh_queue_summary = lambda: gui.DownloaderApp._refresh_queue_summary(app)
